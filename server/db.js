@@ -81,7 +81,7 @@ if (userCount === 0) {
     `);
 
     [
-      { username: "admin", passwordHash: bcrypt.hashSync(process.env.ADMIN_PASSWORD ?? "admin123", 12), name: "店長 小智", role: "admin" },
+      { username: "admin", passwordHash: bcrypt.hashSync(process.env.ADMIN_PASSWORD ?? "admin123", 12), name: "Brian", role: "admin" },
       { username: "clerk", passwordHash: bcrypt.hashSync(process.env.CLERK_PASSWORD ?? "clerk123", 12), name: "店員 小霞", role: "clerk" }
     ].forEach((user) => insertUser.run(user));
 
@@ -175,6 +175,49 @@ if (userCount === 0) {
 
   seed();
 }
+
+function quoteIdentifier(identifier) {
+  return `"${identifier.replaceAll("\"", "\"\"")}"`;
+}
+
+function tableExists(tableName) {
+  return Boolean(
+    db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
+      .get(tableName)
+  );
+}
+
+function migrateStoreManagerName() {
+  const candidateTables = ["users", "staff", "staffs", "admin", "admins"];
+  const candidateColumns = ["name", "displayName", "display_name", "fullName", "full_name"];
+
+  candidateTables.forEach((tableName) => {
+    if (!tableExists(tableName)) return;
+
+    const columns = db.prepare(`PRAGMA table_info(${quoteIdentifier(tableName)})`).all();
+    const columnNames = new Set(columns.map((column) => column.name));
+
+    candidateColumns.forEach((columnName) => {
+      if (!columnNames.has(columnName)) return;
+
+      db.prepare(`
+        UPDATE ${quoteIdentifier(tableName)}
+        SET ${quoteIdentifier(columnName)} = ?
+        WHERE ${quoteIdentifier(columnName)} IN (?, ?)
+           OR ${quoteIdentifier(columnName)} LIKE ?
+      `).run("Brian", "小智", "店長 小智", "%小智%");
+    });
+  });
+
+  if (tableExists("users")) {
+    const columns = db.prepare("PRAGMA table_info(users)").all();
+    if (columns.some((column) => column.name === "username") && columns.some((column) => column.name === "name")) {
+      db.prepare("UPDATE users SET name = ? WHERE username = ?").run("Brian", "admin");
+    }
+  }
+}
+
+migrateStoreManagerName();
 
 export function toCamel(row) {
   if (!row) return row;

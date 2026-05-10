@@ -194,6 +194,21 @@ function App() {
 
   const isAdmin = auth?.user?.role === "admin";
 
+  useEffect(() => {
+    if (!auth?.token) return;
+    api("/me")
+      .then((user) => {
+        const nextAuth = { ...auth, user };
+        localStorage.setItem("pokemon-erp-auth", JSON.stringify(nextAuth));
+        setAuth(nextAuth);
+      })
+      .catch(() => {
+        localStorage.removeItem("pokemon-erp-auth");
+        sessionStorage.removeItem("pokemon-erp-auth");
+        setAuth(null);
+      });
+  }, [auth?.token]);
+
   const load = async () => {
     if (!auth?.token) return;
     const saleQuery = `?from=${dateRange.from}&to=${dateRange.to}`;

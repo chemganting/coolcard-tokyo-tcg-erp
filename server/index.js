@@ -9,6 +9,17 @@ const app = express();
 const port = process.env.PORT ?? 4000;
 const jwtSecret = process.env.JWT_SECRET ?? "local-development-secret-change-me";
 
+function publicUser(row) {
+  const user = toCamel(row);
+  return {
+    id: user.id,
+    username: user.username,
+    name: user.name,
+    displayName: user.displayName ?? user.name,
+    role: user.role
+  };
+}
+
 const allowedOrigins = (process.env.CLIENT_ORIGIN ?? "")
   .split(",")
   .map((origin) => origin.trim())
@@ -35,7 +46,7 @@ function currentUser(request, response, next) {
       .prepare("SELECT id, username, name, role FROM users WHERE id = ?")
       .get(payload.sub);
     if (!row) return response.status(401).json({ message: "請先登入" });
-    request.user = toCamel(row);
+    request.user = publicUser(row);
     next();
   } catch {
     return response.status(401).json({ message: "請先登入" });
@@ -86,7 +97,7 @@ app.post("/api/login", (request, response) => {
     return response.status(401).json({ message: "帳號或密碼錯誤" });
   }
 
-  const user = toCamel({
+  const user = publicUser({
     id: row.id,
     username: row.username,
     name: row.name,
