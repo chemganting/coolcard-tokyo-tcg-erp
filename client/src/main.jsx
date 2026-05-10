@@ -389,7 +389,7 @@ function App() {
         <header className="border-b border-slate-200 bg-white px-4 py-4 sm:px-6 lg:px-8">
           <div className="mx-auto flex max-w-7xl flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <p className="text-sm text-slate-500">繁體中文卡牌店管理系統</p>
+              <p className="text-sm text-slate-500">{APP_NAME}</p>
               <h1 className="text-2xl font-semibold text-slate-950">{APP_NAME}</h1>
             </div>
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
