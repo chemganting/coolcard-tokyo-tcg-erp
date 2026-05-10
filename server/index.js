@@ -8,6 +8,7 @@ import { db, toCamel } from "./db.js";
 const app = express();
 const port = process.env.PORT ?? 4000;
 const jwtSecret = process.env.JWT_SECRET ?? "local-development-secret-change-me";
+const allowedUnits = new Set(["單張", "包", "盒", "箱", "組", "其他"]);
 
 function publicUser(row) {
   const user = toCamel(row);
@@ -66,6 +67,9 @@ function productPayload(body) {
     series: String(body.series ?? "").trim(),
     rarity: String(body.rarity ?? "").trim(),
     condition: String(body.condition ?? "").trim(),
+    unit: allowedUnits.has(String(body.unit ?? "").trim()) ? String(body.unit).trim() : "其他",
+    cardsPerUnit: Number(body.cardsPerUnit),
+    packageSpec: String(body.packageSpec ?? "").trim(),
     cost: Number(body.cost),
     price: Number(body.price),
     stock: Number(body.stock),
@@ -76,7 +80,9 @@ function productPayload(body) {
 
 function validateProduct(product) {
   if (!product.name || !product.series || !product.rarity || !product.condition) return false;
-  return [product.cost, product.price, product.stock, product.lowStockThreshold].every(Number.isFinite) &&
+  if (!product.unit || !product.packageSpec) return false;
+  return [product.cardsPerUnit, product.cost, product.price, product.stock, product.lowStockThreshold].every(Number.isFinite) &&
+    product.cardsPerUnit > 0 &&
     product.cost >= 0 &&
     product.price >= 0 &&
     product.stock >= 0 &&
@@ -119,12 +125,12 @@ app.get("/api/products", currentUser, (request, response) => {
   const keyword = `%${String(request.query.q ?? "").trim()}%`;
   const rows = db
     .prepare(`
-      SELECT id, name, series, rarity, condition, cost, price, stock, low_stock_threshold, notes, created_at, updated_at
+      SELECT id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost, price, stock, low_stock_threshold, notes, created_at, updated_at
       FROM products
-      WHERE name LIKE ? OR series LIKE ? OR rarity LIKE ? OR condition LIKE ? OR notes LIKE ?
+      WHERE name LIKE ? OR series LIKE ? OR rarity LIKE ? OR condition LIKE ? OR unit LIKE ? OR package_spec LIKE ? OR notes LIKE ?
       ORDER BY updated_at DESC, id DESC
     `)
-    .all(keyword, keyword, keyword, keyword, keyword)
+    .all(keyword, keyword, keyword, keyword, keyword, keyword, keyword)
     .map(toCamel);
   response.json(rows);
 });
@@ -135,8 +141,8 @@ app.post("/api/products", currentUser, requireAdmin, (request, response) => {
 
   const result = db
     .prepare(`
-      INSERT INTO products (name, series, rarity, condition, cost, price, stock, low_stock_threshold, notes)
-      VALUES (@name, @series, @rarity, @condition, @cost, @price, @stock, @lowStockThreshold, @notes)
+      INSERT INTO products (name, series, rarity, condition, unit, cards_per_unit, package_spec, cost, price, stock, low_stock_threshold, notes)
+      VALUES (@name, @series, @rarity, @condition, @unit, @cardsPerUnit, @packageSpec, @cost, @price, @stock, @lowStockThreshold, @notes)
     `)
     .run(product);
   response.status(201).json({ id: result.lastInsertRowid });
@@ -153,6 +159,9 @@ app.put("/api/products/:id", currentUser, requireAdmin, (request, response) => {
           series = @series,
           rarity = @rarity,
           condition = @condition,
+          unit = @unit,
+          cards_per_unit = @cardsPerUnit,
+          package_spec = @packageSpec,
           cost = @cost,
           price = @price,
           stock = @stock,
@@ -176,6 +185,98 @@ app.delete("/api/products/:id", currentUser, requireAdmin, (request, response) =
   response.json({ ok: true });
 });
 
+function parseCsv(text) {
+  const rows = [];
+  let current = "";
+  let row = [];
+  let inQuotes = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+
+    if (char === "\"" && inQuotes && next === "\"") {
+      current += "\"";
+      index += 1;
+    } else if (char === "\"") {
+      inQuotes = !inQuotes;
+    } else if (char === "," && !inQuotes) {
+      row.push(current.trim());
+      current = "";
+    } else if ((char === "\n" || char === "\r") && !inQuotes) {
+      if (char === "\r" && next === "\n") index += 1;
+      row.push(current.trim());
+      current = "";
+      if (row.some((cell) => cell !== "")) rows.push(row);
+      row = [];
+    } else {
+      current += char;
+    }
+  }
+
+  row.push(current.trim());
+  if (row.some((cell) => cell !== "")) rows.push(row);
+  return rows;
+}
+
+function importValue(row, names) {
+  const keys = Array.isArray(names) ? names : [names];
+  for (const key of keys) {
+    if (row[key] !== undefined && row[key] !== "") return row[key];
+  }
+  return "";
+}
+
+function normalizeImportRows(body) {
+  if (Array.isArray(body.rows)) return body.rows;
+  const csvText = String(body.csv ?? "").trim();
+  if (!csvText) return [];
+
+  const rows = parseCsv(csvText);
+  const headers = rows.shift()?.map((header) => header.trim()) ?? [];
+  return rows.map((cells) =>
+    Object.fromEntries(headers.map((header, index) => [header, cells[index] ?? ""]))
+  );
+}
+
+app.post("/api/products/import", currentUser, requireAdmin, (request, response) => {
+  const rows = normalizeImportRows(request.body);
+  if (rows.length === 0) return response.status(400).json({ message: "沒有可匯入的資料" });
+
+  const insertProduct = db.prepare(`
+    INSERT INTO products (name, series, rarity, condition, unit, cards_per_unit, package_spec, cost, price, stock, low_stock_threshold, notes)
+    VALUES (@name, @series, @rarity, @condition, @unit, @cardsPerUnit, @packageSpec, @cost, @price, @stock, @lowStockThreshold, @notes)
+  `);
+
+  const imported = db.transaction(() => {
+    let count = 0;
+    rows.forEach((row) => {
+      const unit = String(importValue(row, ["單位", "unit"]) || "單張").trim();
+      const product = productPayload({
+        name: importValue(row, ["商品名稱", "name"]),
+        series: importValue(row, ["卡牌系列", "series"]),
+        rarity: importValue(row, ["稀有度", "rarity"]) || "未分類",
+        condition: importValue(row, ["卡況", "condition"]) || "未標示",
+        unit,
+        cardsPerUnit: importValue(row, ["每單位張數", "cardsPerUnit", "cards_per_unit"]) || 1,
+        packageSpec: importValue(row, ["包裝規格", "packageSpec", "package_spec"]) || `${importValue(row, ["每單位張數", "cardsPerUnit", "cards_per_unit"]) || 1} 張/${unit}`,
+        cost: importValue(row, ["進貨成本", "cost"]),
+        price: importValue(row, ["售價", "price"]),
+        stock: importValue(row, ["庫存數量", "stock"]),
+        lowStockThreshold: importValue(row, ["低庫存門檻", "lowStockThreshold", "low_stock_threshold"]) || 3,
+        notes: importValue(row, ["備註", "notes"])
+      });
+
+      if (!validateProduct(product)) return;
+      insertProduct.run(product);
+      count += 1;
+    });
+    return count;
+  })();
+
+  response.status(201).json({ imported });
+});
+
 app.get("/api/sales", currentUser, (request, response) => {
   const { from, to } = request.query;
   const params = [];
@@ -194,12 +295,16 @@ app.get("/api/sales", currentUser, (request, response) => {
       SELECT
         sales.id,
         sales.quantity,
+        sales.sale_unit,
+        sales.cards_per_unit,
         sales.unit_price,
         sales.total,
         sales.sold_at,
         sales.created_at,
         products.name AS product_name,
         products.series AS product_series,
+        products.unit AS product_unit,
+        products.cards_per_unit AS product_cards_per_unit,
         users.name AS staff_name,
         users.role AS staff_role
       FROM sales
@@ -217,13 +322,15 @@ app.post("/api/sales", currentUser, (request, response) => {
   const productId = Number(request.body.productId);
   const quantity = Number(request.body.quantity);
   const unitPrice = Number(request.body.unitPrice);
+  const saleUnit = allowedUnits.has(String(request.body.saleUnit ?? "").trim()) ? String(request.body.saleUnit).trim() : "其他";
+  const saleCardsPerUnit = Number(request.body.cardsPerUnit);
   const soldAt = String(request.body.soldAt ?? "").trim() || new Date().toISOString().slice(0, 10);
 
-  if (!productId || !Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(unitPrice) || unitPrice < 0) {
+  if (!productId || !Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(unitPrice) || unitPrice < 0 || !Number.isFinite(saleCardsPerUnit) || saleCardsPerUnit <= 0) {
     return response.status(400).json({ message: "銷售資料不完整或格式錯誤" });
   }
 
-  const product = db.prepare("SELECT id, name, stock FROM products WHERE id = ?").get(productId);
+  const product = db.prepare("SELECT id, name, stock, unit, cards_per_unit FROM products WHERE id = ?").get(productId);
   if (!product) return response.status(404).json({ message: "商品不存在" });
   if (product.stock < quantity) {
     return response.status(409).json({ message: `${product.name} 庫存不足，目前剩餘 ${product.stock}` });
@@ -233,10 +340,10 @@ app.post("/api/sales", currentUser, (request, response) => {
     const total = unitPrice * quantity;
     const sale = db
       .prepare(`
-        INSERT INTO sales (product_id, user_id, quantity, unit_price, total, sold_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO sales (product_id, user_id, quantity, sale_unit, cards_per_unit, unit_price, total, sold_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `)
-      .run(productId, request.user.id, quantity, unitPrice, total, soldAt);
+      .run(productId, request.user.id, quantity, saleUnit, saleCardsPerUnit, unitPrice, total, soldAt);
 
     db.prepare("UPDATE products SET stock = stock - ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(quantity, productId);
     return sale.lastInsertRowid;
@@ -282,7 +389,7 @@ app.get("/api/dashboard", currentUser, (_request, response) => {
 
   const inventoryOverview = db
     .prepare(`
-      SELECT id, name, series, rarity, stock, low_stock_threshold
+      SELECT id, name, series, rarity, unit, cards_per_unit, package_spec, stock, low_stock_threshold
       FROM products
       ORDER BY stock ASC, name ASC
       LIMIT 8

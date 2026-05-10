@@ -26,6 +26,9 @@ db.exec(`
     series TEXT NOT NULL,
     rarity TEXT NOT NULL,
     condition TEXT NOT NULL,
+    unit TEXT NOT NULL DEFAULT '單張',
+    cards_per_unit INTEGER NOT NULL DEFAULT 1,
+    package_spec TEXT NOT NULL DEFAULT '單張卡',
     cost REAL NOT NULL,
     price REAL NOT NULL,
     stock INTEGER NOT NULL DEFAULT 0,
@@ -40,6 +43,8 @@ db.exec(`
     product_id INTEGER NOT NULL,
     user_id INTEGER NOT NULL,
     quantity INTEGER NOT NULL,
+    sale_unit TEXT NOT NULL DEFAULT '單張',
+    cards_per_unit INTEGER NOT NULL DEFAULT 1,
     unit_price REAL NOT NULL,
     total REAL NOT NULL,
     sold_at TEXT NOT NULL,
@@ -67,6 +72,29 @@ if (hasLegacyPassword) {
   });
 }
 
+function ensureColumn(tableName, columnName, definition) {
+  const columns = db.prepare(`PRAGMA table_info(${quoteIdentifier(tableName)})`).all();
+  if (!columns.some((column) => column.name === columnName)) {
+    db.prepare(`ALTER TABLE ${quoteIdentifier(tableName)} ADD COLUMN ${quoteIdentifier(columnName)} ${definition}`).run();
+  }
+}
+
+function migrateProductPackaging() {
+  ensureColumn("products", "unit", "TEXT NOT NULL DEFAULT '單張'");
+  ensureColumn("products", "cards_per_unit", "INTEGER NOT NULL DEFAULT 1");
+  ensureColumn("products", "package_spec", "TEXT NOT NULL DEFAULT '單張卡'");
+  ensureColumn("sales", "sale_unit", "TEXT NOT NULL DEFAULT '單張'");
+  ensureColumn("sales", "cards_per_unit", "INTEGER NOT NULL DEFAULT 1");
+
+  db.prepare("UPDATE products SET unit = '單張' WHERE unit IS NULL OR unit = ''").run();
+  db.prepare("UPDATE products SET cards_per_unit = 1 WHERE cards_per_unit IS NULL OR cards_per_unit <= 0").run();
+  db.prepare("UPDATE products SET package_spec = '單張卡' WHERE package_spec IS NULL OR package_spec = ''").run();
+  db.prepare("UPDATE sales SET sale_unit = '單張' WHERE sale_unit IS NULL OR sale_unit = ''").run();
+  db.prepare("UPDATE sales SET cards_per_unit = 1 WHERE cards_per_unit IS NULL OR cards_per_unit <= 0").run();
+}
+
+migrateProductPackaging();
+
 const userCount = db.prepare("SELECT COUNT(*) AS count FROM users").get().count;
 
 if (userCount === 0) {
@@ -76,8 +104,8 @@ if (userCount === 0) {
       VALUES (@username, @passwordHash, @name, @role)
     `);
     const insertProduct = db.prepare(`
-      INSERT INTO products (name, series, rarity, condition, cost, price, stock, low_stock_threshold, notes)
-      VALUES (@name, @series, @rarity, @condition, @cost, @price, @stock, @lowStockThreshold, @notes)
+      INSERT INTO products (name, series, rarity, condition, unit, cards_per_unit, package_spec, cost, price, stock, low_stock_threshold, notes)
+      VALUES (@name, @series, @rarity, @condition, @unit, @cardsPerUnit, @packageSpec, @cost, @price, @stock, @lowStockThreshold, @notes)
     `);
 
     [
@@ -91,6 +119,9 @@ if (userCount === 0) {
         series: "朱&紫 擴充包",
         rarity: "SAR",
         condition: "近全新",
+        unit: "單張",
+        cardsPerUnit: 1,
+        packageSpec: "單張卡",
         cost: 1800,
         price: 2580,
         stock: 4,
@@ -102,6 +133,9 @@ if (userCount === 0) {
         series: "VSTAR Universe",
         rarity: "RRR",
         condition: "良好",
+        unit: "單張",
+        cardsPerUnit: 1,
+        packageSpec: "單張卡",
         cost: 420,
         price: 780,
         stock: 2,
@@ -113,6 +147,9 @@ if (userCount === 0) {
         series: "夢幻收藏",
         rarity: "SR",
         condition: "近全新",
+        unit: "單張",
+        cardsPerUnit: 1,
+        packageSpec: "單張卡",
         cost: 5200,
         price: 7200,
         stock: 1,
@@ -124,6 +161,9 @@ if (userCount === 0) {
         series: "Eevee Heroes",
         rarity: "HR",
         condition: "輕微白邊",
+        unit: "單張",
+        cardsPerUnit: 1,
+        packageSpec: "單張卡",
         cost: 9500,
         price: 12800,
         stock: 2,
@@ -135,6 +175,9 @@ if (userCount === 0) {
         series: "Pokemon GO",
         rarity: "RR",
         condition: "近全新",
+        unit: "包",
+        cardsPerUnit: 5,
+        packageSpec: "5 張/包",
         cost: 120,
         price: 250,
         stock: 18,
@@ -146,6 +189,9 @@ if (userCount === 0) {
         series: "標準環境補充",
         rarity: "U",
         condition: "全新",
+        unit: "盒",
+        cardsPerUnit: 30,
+        packageSpec: "30 張/盒",
         cost: 12,
         price: 30,
         stock: 72,
@@ -158,8 +204,8 @@ if (userCount === 0) {
     const admin = db.prepare("SELECT id FROM users WHERE username = 'admin'").get();
     const clerk = db.prepare("SELECT id FROM users WHERE username = 'clerk'").get();
     const insertSale = db.prepare(`
-      INSERT INTO sales (product_id, user_id, quantity, unit_price, total, sold_at)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO sales (product_id, user_id, quantity, sale_unit, cards_per_unit, unit_price, total, sold_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     [
@@ -168,7 +214,7 @@ if (userCount === 0) {
       [products[5], admin.id, 8, "2026-05-10"],
       [products[1], admin.id, 1, "2026-05-09"]
     ].forEach(([product, userId, quantity, soldAt]) => {
-      insertSale.run(product.id, userId, quantity, product.price, product.price * quantity, soldAt);
+      insertSale.run(product.id, userId, quantity, "單張", 1, product.price, product.price * quantity, soldAt);
       db.prepare("UPDATE products SET stock = stock - ? WHERE id = ?").run(quantity, product.id);
     });
   });

@@ -34,6 +34,11 @@ function authFromStorage() {
 
 const API_BASE_URL = (import.meta.env.VITE_API_URL ?? "").replace(/\/$/, "");
 const APP_NAME = "Coolcard Tokyo TCG ERP";
+const UNIT_OPTIONS = ["單張", "包", "盒", "箱", "組", "其他"];
+
+function formatStock(product) {
+  return `${number.format(product.stock ?? 0)} ${product.unit ?? "單張"}`;
+}
 
 async function api(path, options = {}) {
   const auth = authFromStorage();
@@ -119,6 +124,9 @@ const emptyProduct = {
   series: "",
   rarity: "RR",
   condition: "近全新",
+  unit: "單張",
+  cardsPerUnit: "1",
+  packageSpec: "單張卡",
   cost: "",
   price: "",
   stock: "",
@@ -188,8 +196,9 @@ function App() {
   const [query, setQuery] = useState("");
   const [error, setError] = useState("");
   const [productForm, setProductForm] = useState(emptyProduct);
+  const [importCsv, setImportCsv] = useState("");
   const [editingId, setEditingId] = useState(null);
-  const [saleForm, setSaleForm] = useState({ productId: "", quantity: 1, unitPrice: "", soldAt: new Date().toISOString().slice(0, 10) });
+  const [saleForm, setSaleForm] = useState({ productId: "", quantity: 1, saleUnit: "單張", cardsPerUnit: "1", unitPrice: "", soldAt: new Date().toISOString().slice(0, 10) });
   const [dateRange, setDateRange] = useState({ from: new Date().toISOString().slice(0, 10), to: new Date().toISOString().slice(0, 10) });
 
   const isAdmin = auth?.user?.role === "admin";
@@ -228,7 +237,13 @@ function App() {
 
   useEffect(() => {
     if (!saleForm.productId && products[0]) {
-      setSaleForm((current) => ({ ...current, productId: String(products[0].id), unitPrice: String(products[0].price) }));
+      setSaleForm((current) => ({
+        ...current,
+        productId: String(products[0].id),
+        saleUnit: products[0].unit,
+        cardsPerUnit: String(products[0].cardsPerUnit),
+        unitPrice: String(products[0].price)
+      }));
     }
   }, [products, saleForm.productId]);
 
@@ -242,6 +257,7 @@ function App() {
     setError("");
     const payload = {
       ...productForm,
+      cardsPerUnit: Number(productForm.cardsPerUnit),
       cost: Number(productForm.cost),
       price: Number(productForm.price),
       stock: Number(productForm.stock),
@@ -267,6 +283,9 @@ function App() {
       series: product.series,
       rarity: product.rarity,
       condition: product.condition,
+      unit: product.unit,
+      cardsPerUnit: String(product.cardsPerUnit),
+      packageSpec: product.packageSpec,
       cost: String(product.cost),
       price: String(product.price),
       stock: String(product.stock),
@@ -294,12 +313,30 @@ function App() {
         body: JSON.stringify({
           productId: Number(saleForm.productId),
           quantity: Number(saleForm.quantity),
+          saleUnit: saleForm.saleUnit,
+          cardsPerUnit: Number(saleForm.cardsPerUnit),
           unitPrice: Number(saleForm.unitPrice),
           soldAt: saleForm.soldAt
         })
       });
       setSaleForm((current) => ({ ...current, quantity: 1 }));
       await load();
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const importProducts = async () => {
+    if (!importCsv.trim()) return;
+    setError("");
+    try {
+      const result = await api("/products/import", {
+        method: "POST",
+        body: JSON.stringify({ csv: importCsv })
+      });
+      setImportCsv("");
+      await load();
+      window.alert(`已匯入 ${result.imported} 筆商品`);
     } catch (err) {
       setError(err.message);
     }
@@ -379,8 +416,8 @@ function App() {
           <section id="營業額儀表板" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
             <StatCard icon={CalendarDays} label="今日營業額" value={currency.format(dashboard?.todayRevenue ?? 0)} detail="依銷售日期統計" tone="bg-teal-50 text-teal-700" />
             <StatCard icon={BarChart3} label="本月營業額" value={currency.format(dashboard?.monthRevenue ?? 0)} detail="當月銷售總額" tone="bg-indigo-50 text-indigo-700" />
-            <StatCard icon={ShoppingCart} label="總銷售量" value={`${number.format(dashboard?.totalSalesQuantity ?? 0)} 張`} detail="所有銷售紀錄累計" tone="bg-amber-50 text-amber-700" />
-            <StatCard icon={Boxes} label="低庫存商品數" value={number.format(dashboard?.lowStockCount ?? 0)} detail={`庫存總量 ${number.format(dashboard?.totalStock ?? 0)} 張`} tone="bg-rose-50 text-rose-700" />
+            <StatCard icon={ShoppingCart} label="總銷售量" value={`${number.format(dashboard?.totalSalesQuantity ?? 0)} 單位`} detail="所有銷售紀錄累計" tone="bg-amber-50 text-amber-700" />
+            <StatCard icon={Boxes} label="低庫存商品數" value={number.format(dashboard?.lowStockCount ?? 0)} detail={`庫存總量 ${number.format(dashboard?.totalStock ?? 0)} 單位`} tone="bg-rose-50 text-rose-700" />
           </section>
 
           <section className="grid gap-6 xl:grid-cols-2">
@@ -397,7 +434,7 @@ function App() {
                       <p className="text-sm text-slate-500">{product.series}</p>
                     </div>
                     <div className="text-right">
-                      <p className="font-semibold">{number.format(product.soldQuantity)} 張</p>
+                      <p className="font-semibold">{number.format(product.soldQuantity)} 單位</p>
                       <p className="text-sm text-slate-500">{currency.format(product.revenue)}</p>
                     </div>
                   </div>
@@ -416,10 +453,10 @@ function App() {
                     <div className="flex items-center justify-between gap-2">
                       <p className="font-medium">{product.name}</p>
                       <span className={`rounded px-2 py-1 text-xs font-medium ${product.stock <= product.lowStockThreshold ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-700"}`}>
-                        {product.stock} 張
+                        {formatStock(product)}
                       </span>
                     </div>
-                    <p className="mt-1 text-sm text-slate-500">{product.series} · {product.rarity}</p>
+                    <p className="mt-1 text-sm text-slate-500">{product.series} · {product.rarity} · {product.packageSpec}</p>
                   </div>
                 ))}
               </div>
@@ -438,19 +475,21 @@ function App() {
                   <input
                     value={query}
                     onChange={(event) => setQuery(event.target.value)}
-                    placeholder="搜尋商品、系列、稀有度、卡況"
+                    placeholder="搜尋商品、系列、稀有度、卡況、單位"
                     className="h-10 w-full rounded-md border border-slate-300 bg-white pl-10 pr-3 text-sm outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-100"
                   />
                 </div>
               </div>
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[900px] text-left text-sm">
+                <table className="w-full min-w-[1080px] text-left text-sm">
                   <thead className="border-b border-slate-200 text-xs text-slate-500">
                     <tr>
                       <th className="py-3 pr-4">商品名稱</th>
                       <th className="py-3 pr-4">系列</th>
                       <th className="py-3 pr-4">稀有度</th>
                       <th className="py-3 pr-4">卡況</th>
+                      <th className="py-3 pr-4">單位</th>
+                      <th className="py-3 pr-4">包裝規格</th>
                       <th className="py-3 pr-4">成本</th>
                       <th className="py-3 pr-4">售價</th>
                       <th className="py-3 pr-4">庫存</th>
@@ -464,11 +503,13 @@ function App() {
                         <td className="py-3 pr-4">{product.series}</td>
                         <td className="py-3 pr-4">{product.rarity}</td>
                         <td className="py-3 pr-4">{product.condition}</td>
+                        <td className="py-3 pr-4">{product.unit}</td>
+                        <td className="py-3 pr-4">{product.packageSpec}<p className="text-xs text-slate-500">{product.cardsPerUnit} 張/{product.unit}</p></td>
                         <td className="py-3 pr-4">{currency.format(product.cost)}</td>
                         <td className="py-3 pr-4">{currency.format(product.price)}</td>
                         <td className="py-3 pr-4">
                           <span className={`rounded px-2 py-1 text-xs font-medium ${product.stock <= product.lowStockThreshold ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-700"}`}>
-                            {product.stock <= product.lowStockThreshold ? `低庫存 ${product.stock}` : product.stock}
+                            {product.stock <= product.lowStockThreshold ? `低庫存 ${formatStock(product)}` : formatStock(product)}
                           </span>
                         </td>
                         <td className="py-3">
@@ -506,6 +547,13 @@ function App() {
                   </SelectInput>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
+                  <SelectInput disabled={!isAdmin} value={productForm.unit} onChange={(e) => setProductForm({ ...productForm, unit: e.target.value })}>
+                    {UNIT_OPTIONS.map((unit) => <option key={unit}>{unit}</option>)}
+                  </SelectInput>
+                  <TextInput disabled={!isAdmin} required min="1" type="number" placeholder="每單位張數" value={productForm.cardsPerUnit} onChange={(e) => setProductForm({ ...productForm, cardsPerUnit: e.target.value })} />
+                </div>
+                <TextInput disabled={!isAdmin} required placeholder="包裝規格，例如 5 張/包" value={productForm.packageSpec} onChange={(e) => setProductForm({ ...productForm, packageSpec: e.target.value })} />
+                <div className="grid grid-cols-2 gap-3">
                   <TextInput disabled={!isAdmin} required min="0" type="number" placeholder="進貨成本" value={productForm.cost} onChange={(e) => setProductForm({ ...productForm, cost: e.target.value })} />
                   <TextInput disabled={!isAdmin} required min="0" type="number" placeholder="售價" value={productForm.price} onChange={(e) => setProductForm({ ...productForm, price: e.target.value })} />
                 </div>
@@ -522,6 +570,24 @@ function App() {
             </form>
           </section>
 
+          {isAdmin && (
+            <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="mb-4 flex items-center gap-2">
+                <PackagePlus className="h-5 w-5 text-slate-700" />
+                <h2 className="text-lg font-semibold">Excel / CSV 商品匯入</h2>
+              </div>
+              <TextArea
+                placeholder={"貼上 CSV 內容，欄位：商品名稱,卡牌系列,單位,每單位張數,包裝規格,進貨成本,售價,庫存數量"}
+                value={importCsv}
+                onChange={(e) => setImportCsv(e.target.value)}
+              />
+              <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-sm text-slate-500">支援 Excel 匯出的 CSV。未填稀有度/卡況時會自動補預設值。</p>
+                <Button type="button" onClick={importProducts}>匯入商品</Button>
+              </div>
+            </section>
+          )}
+
           <section id="銷售管理" className="grid gap-6 xl:grid-cols-[0.75fr_1.25fr]">
             <form onSubmit={submitSale} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
               <div className="mb-4 flex items-center gap-2">
@@ -531,17 +597,29 @@ function App() {
               <div className="grid gap-3">
                 <SelectInput value={saleForm.productId} onChange={(e) => {
                   const product = products.find((item) => item.id === Number(e.target.value));
-                  setSaleForm({ ...saleForm, productId: e.target.value, unitPrice: product ? String(product.price) : "" });
+                  setSaleForm({
+                    ...saleForm,
+                    productId: e.target.value,
+                    saleUnit: product?.unit ?? "單張",
+                    cardsPerUnit: product ? String(product.cardsPerUnit) : "1",
+                    unitPrice: product ? String(product.price) : ""
+                  });
                 }}>
-                  {products.map((product) => <option key={product.id} value={product.id}>{product.name}（庫存 {product.stock}）</option>)}
+                  {products.map((product) => <option key={product.id} value={product.id}>{product.name}（庫存 {formatStock(product)}）</option>)}
                 </SelectInput>
-                {selectedProduct && <p className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-600">{selectedProduct.series} · {selectedProduct.rarity} · {selectedProduct.condition}</p>}
+                {selectedProduct && <p className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-600">{selectedProduct.series} · {selectedProduct.rarity} · {selectedProduct.condition} · {selectedProduct.packageSpec}</p>}
                 <div className="grid grid-cols-2 gap-3">
                   <TextInput required min="1" type="number" placeholder="銷售數量" value={saleForm.quantity} onChange={(e) => setSaleForm({ ...saleForm, quantity: e.target.value })} />
+                  <SelectInput value={saleForm.saleUnit} onChange={(e) => setSaleForm({ ...saleForm, saleUnit: e.target.value })}>
+                    {UNIT_OPTIONS.map((unit) => <option key={unit}>{unit}</option>)}
+                  </SelectInput>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <TextInput required min="1" type="number" placeholder="每單位張數" value={saleForm.cardsPerUnit} onChange={(e) => setSaleForm({ ...saleForm, cardsPerUnit: e.target.value })} />
                   <TextInput required min="0" type="number" placeholder="單價" value={saleForm.unitPrice} onChange={(e) => setSaleForm({ ...saleForm, unitPrice: e.target.value })} />
                 </div>
                 <TextInput required type="date" value={saleForm.soldAt} onChange={(e) => setSaleForm({ ...saleForm, soldAt: e.target.value })} />
-                <p className="text-sm text-slate-500">總金額：{currency.format(Number(saleForm.quantity || 0) * Number(saleForm.unitPrice || 0))}</p>
+                <p className="text-sm text-slate-500">總金額：{currency.format(Number(saleForm.quantity || 0) * Number(saleForm.unitPrice || 0))}，銷售 {number.format(Number(saleForm.quantity || 0))} {saleForm.saleUnit}</p>
                 <Button type="submit">新增銷售並扣庫存</Button>
               </div>
             </form>
@@ -558,12 +636,13 @@ function App() {
                 </div>
               </div>
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[760px] text-left text-sm">
+                <table className="w-full min-w-[860px] text-left text-sm">
                   <thead className="border-b border-slate-200 text-xs text-slate-500">
                     <tr>
                       <th className="py-3 pr-4">日期</th>
                       <th className="py-3 pr-4">商品</th>
-                      <th className="py-3 pr-4">數量</th>
+                      <th className="py-3 pr-4">數量/單位</th>
+                      <th className="py-3 pr-4">規格</th>
                       <th className="py-3 pr-4">單價</th>
                       <th className="py-3 pr-4">總金額</th>
                       <th className="py-3 pr-4">店員</th>
@@ -575,7 +654,8 @@ function App() {
                       <tr key={sale.id}>
                         <td className="py-3 pr-4">{sale.soldAt}</td>
                         <td className="py-3 pr-4 font-medium">{sale.productName}<p className="text-xs text-slate-500">{sale.productSeries}</p></td>
-                        <td className="py-3 pr-4">{sale.quantity}</td>
+                        <td className="py-3 pr-4">{sale.quantity} {sale.saleUnit}</td>
+                        <td className="py-3 pr-4">{sale.cardsPerUnit} 張/{sale.saleUnit}</td>
                         <td className="py-3 pr-4">{currency.format(sale.unitPrice)}</td>
                         <td className="py-3 pr-4 font-semibold">{currency.format(sale.total)}</td>
                         <td className="py-3 pr-4">{sale.staffName}</td>
