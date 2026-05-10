@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: pokemon-card-erp-api
+    runtime: node
+    plan: free
+    buildCommand: npm install --cache .npm-cache
+    startCommand: npm run start --workspace server
+    envVars:
+      - key: NODE_VERSION
+        value: 22.16.0
+      - key: CLIENT_ORIGIN
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_EXPIRES_IN
+        value: 7d
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: CLERK_PASSWORD
+        sync: false
+      - key: DB_PATH
+        value: /opt/render/project/src/server/pokemon-card-erp.sqlite
