@@ -6,6 +6,11 @@
   color-scheme: light;
 }
 
+html,
+body {
+  overflow-x: hidden;
+}
+
 body {
   margin: 0;
   min-width: 320px;

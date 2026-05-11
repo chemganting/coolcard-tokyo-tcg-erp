@@ -809,9 +809,9 @@ function App() {
         </div>
       )}
 
-      <main className="lg:pl-64">
+      <main className="min-w-0 max-w-full lg:ml-64 lg:w-[calc(100vw-16rem)]">
         <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur sm:px-6 lg:px-8">
-          <div className="mx-auto flex max-w-7xl flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="mx-auto flex w-full max-w-full min-w-0 flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex items-center gap-3">
               <Button type="button" variant="secondary" className="h-12 w-12 px-0 lg:hidden" onClick={() => setMobileMenuOpen(true)}>
                 <Menu className="h-5 w-5" />
@@ -842,7 +842,7 @@ function App() {
           </div>
         </header>
 
-        <div className="mx-auto max-w-7xl space-y-6 px-3 py-4 sm:px-6 sm:py-6 lg:px-8">
+        <div className="mx-auto w-full max-w-full min-w-0 space-y-6 px-3 py-4 sm:px-6 sm:py-6 lg:px-6 xl:px-8">
           {error && (
             <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
               {error}
@@ -987,8 +987,8 @@ function App() {
               <h2 className="text-lg font-semibold">商品庫存管理</h2>
             </div>
 
-            <div className="grid gap-6 md:grid-cols-[minmax(320px,40%)_minmax(0,60%)] lg:grid-cols-[minmax(340px,35%)_minmax(0,65%)] xl:grid-cols-[minmax(380px,35%)_minmax(0,65%)]">
-              <form onSubmit={submitProduct} className="rounded-xl border border-slate-200 bg-white shadow-sm lg:sticky lg:top-24 lg:max-h-[calc(100vh-8rem)] lg:overflow-hidden">
+            <div className="grid min-w-0 max-w-full gap-6 md:grid-cols-[minmax(280px,40%)_minmax(0,60%)] lg:grid-cols-[minmax(300px,35%)_minmax(0,65%)] xl:grid-cols-[minmax(340px,35%)_minmax(0,65%)]">
+              <form onSubmit={submitProduct} className="min-w-0 rounded-xl border border-slate-200 bg-white shadow-sm lg:sticky lg:top-24 lg:max-h-[calc(100vh-8rem)] lg:overflow-hidden">
                 <div className="border-b border-slate-200 px-4 py-4">
                   <div className="flex items-center gap-2">
                     <PackagePlus className="h-5 w-5 text-slate-700" />
@@ -1000,7 +1000,7 @@ function App() {
                 <div className="grid gap-5 px-4 py-4 lg:max-h-[calc(100vh-16rem)] lg:overflow-y-auto">
                   <section>
                     <h4 className="mb-3 text-sm font-semibold text-slate-700">基本資訊</h4>
-                    <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="grid gap-3 sm:grid-cols-2 sm:[grid-template-columns:repeat(2,minmax(0,1fr))]">
                       <label className="grid gap-1 text-sm font-medium text-slate-600">
                         商品名稱
                         <TextInput disabled={!isAdmin} required value={productForm.name} onChange={(e) => setProductForm({ ...productForm, name: e.target.value })} />
@@ -1026,7 +1026,7 @@ function App() {
 
                   <section>
                     <h4 className="mb-3 text-sm font-semibold text-slate-700">價格資訊</h4>
-                    <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="grid gap-3 sm:grid-cols-2 sm:[grid-template-columns:repeat(2,minmax(0,1fr))]">
                       <label className="grid gap-1 text-sm font-medium text-slate-600">
                         成本
                         <TextInput disabled={!isAdmin} required min="0" type="number" value={productForm.cost} onChange={(e) => setProductForm({ ...productForm, cost: e.target.value })} />
@@ -1040,7 +1040,7 @@ function App() {
 
                   <section>
                     <h4 className="mb-3 text-sm font-semibold text-slate-700">庫存資訊</h4>
-                    <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="grid gap-3 sm:grid-cols-2 sm:[grid-template-columns:repeat(2,minmax(0,1fr))]">
                       <label className="grid gap-1 text-sm font-medium text-slate-600">
                         單位
                         <SelectInput disabled={!isAdmin} value={productForm.unit} onChange={(e) => setProductForm({ ...productForm, unit: e.target.value })}>
@@ -1080,10 +1080,10 @@ function App() {
                 </div>
               </form>
 
-              <div className="min-w-0 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="min-w-0 max-w-full overflow-hidden rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
                 <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <h3 className="font-semibold text-slate-900">商品列表</h3>
-                  <div className="sticky top-[92px] z-20 w-full bg-white py-1 sm:static sm:w-96 sm:bg-transparent sm:py-0">
+                  <div className="sticky top-[92px] z-20 w-full min-w-0 bg-white py-1 sm:static sm:max-w-sm sm:flex-1 sm:bg-transparent sm:py-0">
                     <Search className="pointer-events-none absolute left-3 top-2.5 h-5 w-5 text-slate-400" />
                     <input
                       value={searchInput}
@@ -1095,7 +1095,7 @@ function App() {
                 </div>
 
                 <div className="hidden overflow-x-auto lg:block">
-                  <table className="w-full min-w-[1080px] text-left text-sm">
+                  <table className="min-w-full table-auto text-left text-sm">
                     <thead className="border-b border-slate-200 text-xs text-slate-500">
                       <tr>
                         <th className="py-3 pr-4">商品名稱</th>
@@ -1239,7 +1239,7 @@ function App() {
             )}
           </section>
 
-          <section id="銷售管理" className="grid gap-6 xl:grid-cols-[0.75fr_1.25fr]">
+          <section id="銷售管理" className="grid min-w-0 gap-6 xl:grid-cols-[minmax(280px,0.75fr)_minmax(0,1.25fr)]">
             <form onSubmit={submitSale} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
               <div className="mb-4 flex items-center gap-2">
                 <ShoppingCart className="h-5 w-5 text-slate-700" />
@@ -1290,7 +1290,7 @@ function App() {
                 </div>
               </div>
               <div className="hidden overflow-x-auto lg:block">
-                <table className="w-full min-w-[860px] text-left text-sm">
+                <table className="min-w-full table-auto text-left text-sm">
                   <thead className="border-b border-slate-200 text-xs text-slate-500">
                     <tr>
                       <th className="py-3 pr-4">日期</th>
@@ -1351,7 +1351,7 @@ function App() {
               <h2 className="text-lg font-semibold">操作紀錄</h2>
             </div>
             <div className="hidden overflow-x-auto lg:block">
-              <table className="w-full min-w-[920px] text-left text-sm">
+              <table className="min-w-full table-auto text-left text-sm">
                 <thead className="border-b border-slate-200 text-xs text-slate-500">
                   <tr>
                     <th className="py-3 pr-4">時間</th>
@@ -1413,7 +1413,7 @@ function App() {
           </section>
 
           {isAdmin && (
-            <section id="員工管理" className="grid gap-6 xl:grid-cols-[0.75fr_1.25fr]">
+            <section id="員工管理" className="grid min-w-0 gap-6 xl:grid-cols-[minmax(280px,0.75fr)_minmax(0,1.25fr)]">
               <form onSubmit={submitEmployee} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
                 <div className="mb-4 flex items-center gap-2">
                   <UserRound className="h-5 w-5 text-slate-700" />
@@ -1470,7 +1470,7 @@ function App() {
                   <h2 className="text-lg font-semibold">所有員工</h2>
                 </div>
                 <div className="hidden overflow-x-auto lg:block">
-                  <table className="w-full min-w-[980px] text-left text-sm">
+                  <table className="min-w-full table-auto text-left text-sm">
                     <thead className="border-b border-slate-200 text-xs text-slate-500">
                       <tr>
                         <th className="py-3 pr-4">username</th>
@@ -1623,7 +1623,7 @@ function App() {
               </div>
 
               <div className="hidden overflow-x-auto lg:block">
-                <table className="w-full min-w-[860px] text-left text-sm">
+                <table className="min-w-full table-auto text-left text-sm">
                   <thead className="border-b border-slate-200 text-xs text-slate-500">
                     <tr>
                       <th className="py-3 pr-4">檔名</th>
