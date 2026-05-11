@@ -982,136 +982,197 @@ function App() {
           </section>
 
           <section id="商品庫存">
-            <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="mb-4 flex items-center gap-2">
-                <Boxes className="h-5 w-5 text-slate-700" />
-                <h2 className="text-lg font-semibold">商品庫存管理</h2>
-              </div>
+            <div className="mb-4 flex items-center gap-2">
+              <Boxes className="h-5 w-5 text-slate-700" />
+              <h2 className="text-lg font-semibold">商品庫存管理</h2>
+            </div>
 
-              <form onSubmit={submitProduct} className="mb-6 rounded-lg border border-slate-200 bg-slate-50 p-4">
-                <div className="flex items-center gap-2">
-                  <PackagePlus className="h-5 w-5 text-slate-700" />
-                  <h3 className="text-base font-semibold">{editingId ? "編輯商品" : "新增商品"}</h3>
+            <div className="grid gap-6 md:grid-cols-[minmax(320px,40%)_minmax(0,60%)] lg:grid-cols-[minmax(340px,35%)_minmax(0,65%)] xl:grid-cols-[minmax(380px,35%)_minmax(0,65%)]">
+              <form onSubmit={submitProduct} className="rounded-xl border border-slate-200 bg-white shadow-sm lg:sticky lg:top-24 lg:max-h-[calc(100vh-8rem)] lg:overflow-hidden">
+                <div className="border-b border-slate-200 px-4 py-4">
+                  <div className="flex items-center gap-2">
+                    <PackagePlus className="h-5 w-5 text-slate-700" />
+                    <h3 className="text-base font-semibold">{editingId ? "編輯商品" : "新增商品"}</h3>
+                  </div>
+                  {!isAdmin && <p className="mt-3 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-700">店員可查看庫存與新增銷售，但不能新增、編輯或刪除商品。</p>}
                 </div>
-                {!isAdmin && <p className="mt-3 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-700">店員可查看庫存與新增銷售，但不能新增、編輯或刪除商品。</p>}
-                <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                  <TextInput disabled={!isAdmin} required placeholder="商品名稱" value={productForm.name} onChange={(e) => setProductForm({ ...productForm, name: e.target.value })} />
-                  <TextInput disabled={!isAdmin} required placeholder="卡牌系列" value={productForm.series} onChange={(e) => setProductForm({ ...productForm, series: e.target.value })} />
-                  <SelectInput disabled={!isAdmin} value={productForm.rarity} onChange={(e) => setProductForm({ ...productForm, rarity: e.target.value })}>
-                    {["C", "U", "R", "RR", "RRR", "SR", "SAR", "UR", "HR", "PROMO"].map((rarity) => <option key={rarity}>{rarity}</option>)}
-                  </SelectInput>
-                  <SelectInput disabled={!isAdmin} value={productForm.condition} onChange={(e) => setProductForm({ ...productForm, condition: e.target.value })}>
-                    {["全新", "近全新", "良好", "輕微白邊", "明顯傷痕"].map((condition) => <option key={condition}>{condition}</option>)}
-                  </SelectInput>
-                  <SelectInput disabled={!isAdmin} value={productForm.unit} onChange={(e) => setProductForm({ ...productForm, unit: e.target.value })}>
-                    {UNIT_OPTIONS.map((unit) => <option key={unit}>{unit}</option>)}
-                  </SelectInput>
-                  <TextInput disabled={!isAdmin} required min="1" type="number" placeholder="每單位張數" value={productForm.cardsPerUnit} onChange={(e) => setProductForm({ ...productForm, cardsPerUnit: e.target.value })} />
-                  <TextInput disabled={!isAdmin} required placeholder="包裝規格，例如 5 張/包" value={productForm.packageSpec} onChange={(e) => setProductForm({ ...productForm, packageSpec: e.target.value })} />
-                  <TextInput disabled={!isAdmin} required min="0" type="number" placeholder="進貨成本" value={productForm.cost} onChange={(e) => setProductForm({ ...productForm, cost: e.target.value })} />
-                  <TextInput disabled={!isAdmin} required min="0" type="number" placeholder="售價" value={productForm.price} onChange={(e) => setProductForm({ ...productForm, price: e.target.value })} />
-                  <TextInput disabled={!isAdmin} required min="0" type="number" placeholder="庫存數量" value={productForm.stock} onChange={(e) => setProductForm({ ...productForm, stock: e.target.value })} />
-                  <TextInput disabled={!isAdmin} required min="0" type="number" placeholder="低庫存門檻" value={productForm.lowStockThreshold} onChange={(e) => setProductForm({ ...productForm, lowStockThreshold: e.target.value })} />
-                  <TextArea disabled={!isAdmin} placeholder="備註" value={productForm.notes} onChange={(e) => setProductForm({ ...productForm, notes: e.target.value })} />
+
+                <div className="grid gap-5 px-4 py-4 lg:max-h-[calc(100vh-16rem)] lg:overflow-y-auto">
+                  <section>
+                    <h4 className="mb-3 text-sm font-semibold text-slate-700">基本資訊</h4>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <label className="grid gap-1 text-sm font-medium text-slate-600">
+                        商品名稱
+                        <TextInput disabled={!isAdmin} required value={productForm.name} onChange={(e) => setProductForm({ ...productForm, name: e.target.value })} />
+                      </label>
+                      <label className="grid gap-1 text-sm font-medium text-slate-600">
+                        系列
+                        <TextInput disabled={!isAdmin} required value={productForm.series} onChange={(e) => setProductForm({ ...productForm, series: e.target.value })} />
+                      </label>
+                      <label className="grid gap-1 text-sm font-medium text-slate-600">
+                        稀有度
+                        <SelectInput disabled={!isAdmin} value={productForm.rarity} onChange={(e) => setProductForm({ ...productForm, rarity: e.target.value })}>
+                          {["C", "U", "R", "RR", "RRR", "SR", "SAR", "UR", "HR", "PROMO"].map((rarity) => <option key={rarity}>{rarity}</option>)}
+                        </SelectInput>
+                      </label>
+                      <label className="grid gap-1 text-sm font-medium text-slate-600">
+                        卡況
+                        <SelectInput disabled={!isAdmin} value={productForm.condition} onChange={(e) => setProductForm({ ...productForm, condition: e.target.value })}>
+                          {["全新", "近全新", "良好", "輕微白邊", "明顯傷痕"].map((condition) => <option key={condition}>{condition}</option>)}
+                        </SelectInput>
+                      </label>
+                    </div>
+                  </section>
+
+                  <section>
+                    <h4 className="mb-3 text-sm font-semibold text-slate-700">價格資訊</h4>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <label className="grid gap-1 text-sm font-medium text-slate-600">
+                        成本
+                        <TextInput disabled={!isAdmin} required min="0" type="number" value={productForm.cost} onChange={(e) => setProductForm({ ...productForm, cost: e.target.value })} />
+                      </label>
+                      <label className="grid gap-1 text-sm font-medium text-slate-600">
+                        售價
+                        <TextInput disabled={!isAdmin} required min="0" type="number" value={productForm.price} onChange={(e) => setProductForm({ ...productForm, price: e.target.value })} />
+                      </label>
+                    </div>
+                  </section>
+
+                  <section>
+                    <h4 className="mb-3 text-sm font-semibold text-slate-700">庫存資訊</h4>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <label className="grid gap-1 text-sm font-medium text-slate-600">
+                        單位
+                        <SelectInput disabled={!isAdmin} value={productForm.unit} onChange={(e) => setProductForm({ ...productForm, unit: e.target.value })}>
+                          {UNIT_OPTIONS.map((unit) => <option key={unit}>{unit}</option>)}
+                        </SelectInput>
+                      </label>
+                      <label className="grid gap-1 text-sm font-medium text-slate-600">
+                        每單位張數
+                        <TextInput disabled={!isAdmin} required min="1" type="number" value={productForm.cardsPerUnit} onChange={(e) => setProductForm({ ...productForm, cardsPerUnit: e.target.value })} />
+                      </label>
+                      <label className="grid gap-1 text-sm font-medium text-slate-600 sm:col-span-2">
+                        包裝規格
+                        <TextInput disabled={!isAdmin} required placeholder="例如 5 張/包" value={productForm.packageSpec} onChange={(e) => setProductForm({ ...productForm, packageSpec: e.target.value })} />
+                      </label>
+                      <label className="grid gap-1 text-sm font-medium text-slate-600">
+                        庫存數量
+                        <TextInput disabled={!isAdmin} required min="0" type="number" value={productForm.stock} onChange={(e) => setProductForm({ ...productForm, stock: e.target.value })} />
+                      </label>
+                      <label className="grid gap-1 text-sm font-medium text-slate-600">
+                        低庫存門檻
+                        <TextInput disabled={!isAdmin} required min="0" type="number" value={productForm.lowStockThreshold} onChange={(e) => setProductForm({ ...productForm, lowStockThreshold: e.target.value })} />
+                      </label>
+                      <label className="grid gap-1 text-sm font-medium text-slate-600 sm:col-span-2">
+                        備註
+                        <TextArea disabled={!isAdmin} value={productForm.notes} onChange={(e) => setProductForm({ ...productForm, notes: e.target.value })} />
+                      </label>
+                    </div>
+                  </section>
                 </div>
-                <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:gap-2">
-                  <Button disabled={!isAdmin} type="submit" className="w-full sm:w-auto">
+
+                <div className="sticky bottom-0 flex flex-col gap-3 border-t border-slate-200 bg-white px-4 py-4 sm:flex-row sm:gap-2">
+                  <Button disabled={!isAdmin} type="submit" className="w-full">
                     <PackagePlus className="h-4 w-4" />
                     {editingId ? "儲存變更" : "建立商品"}
                   </Button>
-                  {editingId && <Button variant="secondary" type="button" onClick={() => { setEditingId(null); setProductForm(emptyProduct); }}>取消</Button>}
+                  {editingId && <Button variant="secondary" type="button" className="w-full sm:w-auto" onClick={() => { setEditingId(null); setProductForm(emptyProduct); }}>取消</Button>}
                 </div>
               </form>
 
-              <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <h3 className="font-semibold text-slate-900">商品列表</h3>
-                <div className="sticky top-[92px] z-20 w-full bg-white py-1 sm:static sm:w-80 sm:bg-transparent sm:py-0">
-                  <Search className="pointer-events-none absolute left-3 top-2.5 h-5 w-5 text-slate-400" />
-                  <input
-                    value={searchInput}
-                    onChange={(event) => setSearchInput(event.target.value)}
-                    placeholder="搜尋商品、系列、稀有度、編號"
-                    className="h-12 w-full rounded-md border border-slate-300 bg-white pl-10 pr-3 text-base outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-100 sm:h-10 sm:text-sm"
-                  />
+              <div className="min-w-0 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <h3 className="font-semibold text-slate-900">商品列表</h3>
+                  <div className="sticky top-[92px] z-20 w-full bg-white py-1 sm:static sm:w-96 sm:bg-transparent sm:py-0">
+                    <Search className="pointer-events-none absolute left-3 top-2.5 h-5 w-5 text-slate-400" />
+                    <input
+                      value={searchInput}
+                      onChange={(event) => setSearchInput(event.target.value)}
+                      placeholder="搜尋商品、系列、稀有度、編號"
+                      className="h-12 w-full rounded-md border border-slate-300 bg-white pl-10 pr-3 text-base outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-100 sm:h-10 sm:text-sm"
+                    />
+                  </div>
                 </div>
-              </div>
-              <div className="hidden overflow-x-auto lg:block">
-                <table className="w-full min-w-[1080px] text-left text-sm">
-                  <thead className="border-b border-slate-200 text-xs text-slate-500">
-                    <tr>
-                      <th className="py-3 pr-4">商品名稱</th>
-                      <th className="py-3 pr-4">系列</th>
-                      <th className="py-3 pr-4">稀有度</th>
-                      <th className="py-3 pr-4">卡況</th>
-                      <th className="py-3 pr-4">單位</th>
-                      <th className="py-3 pr-4">包裝規格</th>
-                      <th className="py-3 pr-4">成本</th>
-                      <th className="py-3 pr-4">售價</th>
-                      <th className="py-3 pr-4">庫存</th>
-                      <th className="py-3">操作</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {visibleProducts.map((product) => (
-                      <tr key={product.id}>
-                        <td className="py-3 pr-4 font-medium">{product.name}<p className="text-xs text-slate-500">{product.notes}</p></td>
-                        <td className="py-3 pr-4">{product.series}</td>
-                        <td className="py-3 pr-4">{product.rarity}</td>
-                        <td className="py-3 pr-4">{product.condition}</td>
-                        <td className="py-3 pr-4">{product.unit}</td>
-                        <td className="py-3 pr-4">{product.packageSpec}<p className="text-xs text-slate-500">{product.cardsPerUnit} 張/{product.unit}</p></td>
-                        <td className="py-3 pr-4">{currency.format(product.cost)}</td>
-                        <td className="py-3 pr-4">{currency.format(product.price)}</td>
-                        <td className="py-3 pr-4">
-                          <span className={`rounded px-2 py-1 text-xs font-medium ${product.stock <= product.lowStockThreshold ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-700"}`}>
-                            {product.stock <= product.lowStockThreshold ? `低庫存 ${formatStock(product)}` : formatStock(product)}
-                          </span>
-                        </td>
-                        <td className="py-3">
-                          <div className="flex gap-2">
-                            <Button variant="secondary" disabled={!isAdmin} onClick={() => editProduct(product)} title="編輯">
-                              <Edit3 className="h-4 w-4" />
-                            </Button>
-                            <Button variant="danger" disabled={!isAdmin} onClick={() => deleteProduct(product)} title="刪除">
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        </td>
+
+                <div className="hidden overflow-x-auto lg:block">
+                  <table className="w-full min-w-[1080px] text-left text-sm">
+                    <thead className="border-b border-slate-200 text-xs text-slate-500">
+                      <tr>
+                        <th className="py-3 pr-4">商品名稱</th>
+                        <th className="py-3 pr-4">系列</th>
+                        <th className="py-3 pr-4">稀有度</th>
+                        <th className="py-3 pr-4">卡況</th>
+                        <th className="py-3 pr-4">單位</th>
+                        <th className="py-3 pr-4">包裝規格</th>
+                        <th className="py-3 pr-4">成本</th>
+                        <th className="py-3 pr-4">售價</th>
+                        <th className="py-3 pr-4">庫存</th>
+                        <th className="py-3">操作</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <div className="grid gap-3 lg:hidden">
-                {visibleProducts.map((product) => (
-                  <article key={product.id} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <h3 className="truncate font-semibold text-slate-950">{product.name}</h3>
-                        <p className="mt-1 text-sm text-slate-500">{product.series} · {product.rarity} · {product.condition}</p>
-                        <p className="mt-1 text-sm text-slate-500">{product.packageSpec}</p>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {visibleProducts.map((product) => (
+                        <tr key={product.id}>
+                          <td className="py-3 pr-4 font-medium">{product.name}<p className="text-xs text-slate-500">{product.notes}</p></td>
+                          <td className="py-3 pr-4">{product.series}</td>
+                          <td className="py-3 pr-4">{product.rarity}</td>
+                          <td className="py-3 pr-4">{product.condition}</td>
+                          <td className="py-3 pr-4">{product.unit}</td>
+                          <td className="py-3 pr-4">{product.packageSpec}<p className="text-xs text-slate-500">{product.cardsPerUnit} 張/{product.unit}</p></td>
+                          <td className="py-3 pr-4">{currency.format(product.cost)}</td>
+                          <td className="py-3 pr-4">{currency.format(product.price)}</td>
+                          <td className="py-3 pr-4">
+                            <span className={`rounded px-2 py-1 text-xs font-medium ${product.stock <= product.lowStockThreshold ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-700"}`}>
+                              {product.stock <= product.lowStockThreshold ? `低庫存 ${formatStock(product)}` : formatStock(product)}
+                            </span>
+                          </td>
+                          <td className="py-3">
+                            <div className="flex gap-2">
+                              <Button variant="secondary" disabled={!isAdmin} onClick={() => editProduct(product)} title="編輯">
+                                <Edit3 className="h-4 w-4" />
+                              </Button>
+                              <Button variant="danger" disabled={!isAdmin} onClick={() => deleteProduct(product)} title="刪除">
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="grid gap-3 lg:hidden">
+                  {visibleProducts.map((product) => (
+                    <article key={product.id} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <h3 className="truncate font-semibold text-slate-950">{product.name}</h3>
+                          <p className="mt-1 text-sm text-slate-500">{product.series} · {product.rarity} · {product.condition}</p>
+                          <p className="mt-1 text-sm text-slate-500">{product.packageSpec}</p>
+                        </div>
+                        <span className={`shrink-0 rounded px-2 py-1 text-xs font-medium ${product.stock <= product.lowStockThreshold ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-700"}`}>
+                          {formatStock(product)}
+                        </span>
                       </div>
-                      <span className={`shrink-0 rounded px-2 py-1 text-xs font-medium ${product.stock <= product.lowStockThreshold ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-700"}`}>
-                        {formatStock(product)}
-                      </span>
-                    </div>
-                    <div className="mt-3 flex items-center justify-between gap-3">
-                      <div>
-                        <p className="text-xs text-slate-500">售價</p>
-                        <p className="font-semibold">{currency.format(product.price)}</p>
+                      <div className="mt-3 flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-xs text-slate-500">售價</p>
+                          <p className="font-semibold">{currency.format(product.price)}</p>
+                        </div>
+                        <div className="flex gap-2">
+                          <Button type="button" variant="secondary" onClick={() => addQuickSaleItem(product)}>
+                            <Plus className="h-4 w-4" />
+                            銷售
+                          </Button>
+                          <Button variant="secondary" disabled={!isAdmin} onClick={() => editProduct(product)} title="編輯">
+                            <Edit3 className="h-4 w-4" />
+                          </Button>
+                        </div>
                       </div>
-                      <div className="flex gap-2">
-                        <Button type="button" variant="secondary" onClick={() => addQuickSaleItem(product)}>
-                          <Plus className="h-4 w-4" />
-                          銷售
-                        </Button>
-                        <Button variant="secondary" disabled={!isAdmin} onClick={() => editProduct(product)} title="編輯">
-                          <Edit3 className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </div>
-                  </article>
-                ))}
+                    </article>
+                  ))}
+                </div>
               </div>
             </div>
           </section>
