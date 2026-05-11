@@ -156,7 +156,8 @@ const entityLabels = {
   product: "商品",
   sale: "銷售紀錄",
   user: "員工",
-  inventory: "庫存"
+  inventory: "庫存",
+  purchase: "進貨單"
 };
 
 async function api(path, options = {}) {
@@ -286,6 +287,17 @@ const emptyEmployee = {
   isActive: true
 };
 
+const emptyPurchase = {
+  supplier: "",
+  purchaseDate: new Date().toISOString().slice(0, 10),
+  productId: "",
+  quantity: "1",
+  unit: "單張",
+  unitCost: "",
+  paymentStatus: "未付款",
+  notes: ""
+};
+
 function Login({ onLogin }) {
   const [form, setForm] = useState({ username: "admin", password: "admin123" });
   const [error, setError] = useState("");
@@ -342,6 +354,7 @@ function App() {
   const [wakingBackend, setWakingBackend] = useState(false);
   const [products, setProducts] = useState([]);
   const [deletedProducts, setDeletedProducts] = useState([]);
+  const [purchases, setPurchases] = useState([]);
   const [sales, setSales] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [backups, setBackups] = useState([]);
@@ -364,6 +377,15 @@ function App() {
   const [quickSaleItems, setQuickSaleItems] = useState([]);
   const [error, setError] = useState("");
   const [productForm, setProductForm] = useState(emptyProduct);
+  const [purchaseForm, setPurchaseForm] = useState(emptyPurchase);
+  const [editingPurchaseId, setEditingPurchaseId] = useState(null);
+  const [purchaseFilters, setPurchaseFilters] = useState({
+    from: new Date(new Date().setDate(new Date().getDate() - 30)).toISOString().slice(0, 10),
+    to: new Date().toISOString().slice(0, 10),
+    supplier: "",
+    product: "",
+    paymentStatus: ""
+  });
   const [employeeForm, setEmployeeForm] = useState(emptyEmployee);
   const [editingEmployeeId, setEditingEmployeeId] = useState(null);
   const [employeeDraft, setEmployeeDraft] = useState(null);
@@ -380,6 +402,7 @@ function App() {
     [BarChart3, "營業額儀表板"],
     [TrendingUp, "利潤分析"],
     [Boxes, "商品庫存"],
+    [PackagePlus, "進貨管理"],
     [ShoppingCart, "銷售管理"],
     [History, "操作紀錄"],
     ...(isAdmin ? [[UserRound, "員工管理"], [Database, "系統備份"]] : [])
@@ -420,10 +443,14 @@ function App() {
     if (!auth?.token) return;
     setLoading(true);
     const saleQuery = `?from=${dateRange.from}&to=${dateRange.to}`;
+    const purchaseQuery = new URLSearchParams(
+      Object.fromEntries(Object.entries(purchaseFilters).filter(([, value]) => value))
+    ).toString();
     try {
-      const [productRows, deletedProductRows, saleRows, dashboardRow, profitRow, employeeRows, backupRows] = await Promise.all([
+      const [productRows, deletedProductRows, purchaseRows, saleRows, dashboardRow, profitRow, employeeRows, backupRows] = await Promise.all([
         api("/products"),
         isAdmin ? api("/products/deleted").catch(() => []) : Promise.resolve([]),
+        api(`/purchases${purchaseQuery ? `?${purchaseQuery}` : ""}`).catch(() => []),
         api(`/sales${saleQuery}`),
         api("/dashboard"),
         api("/profit-report"),
@@ -432,6 +459,7 @@ function App() {
       ]);
       setProducts(productRows);
       setDeletedProducts(deletedProductRows);
+      setPurchases(purchaseRows);
       setSales(saleRows);
       setDashboard(dashboardRow);
       setProfitReport(profitRow);
@@ -464,7 +492,7 @@ function App() {
 
   useEffect(() => {
     load().catch((err) => setError(err.message));
-  }, [auth, dateRange.from, dateRange.to]);
+  }, [auth, dateRange.from, dateRange.to, purchaseFilters.from, purchaseFilters.to, purchaseFilters.supplier, purchaseFilters.product, purchaseFilters.paymentStatus]);
 
   useEffect(() => {
     if (!saleForm.productId && products[0]) {
@@ -478,10 +506,25 @@ function App() {
     }
   }, [products, saleForm.productId]);
 
+  useEffect(() => {
+    if (!purchaseForm.productId && products[0]) {
+      setPurchaseForm((current) => ({
+        ...current,
+        productId: String(products[0].id),
+        unit: products[0].unit
+      }));
+    }
+  }, [products, purchaseForm.productId]);
+
   const selectedProduct = useMemo(
     () => products.find((product) => product.id === Number(saleForm.productId)),
     [products, saleForm.productId]
   );
+  const selectedPurchaseProduct = useMemo(
+    () => products.find((product) => product.id === Number(purchaseForm.productId)),
+    [products, purchaseForm.productId]
+  );
+  const purchaseTotalCost = Number(purchaseForm.quantity || 0) * Number(purchaseForm.unitCost || 0);
   const productUnitOptions = useMemo(() => ["全部", ...Array.from(new Set(products.map((product) => product.unit).filter(Boolean)))], [products]);
   const filteredProducts = useMemo(() => {
     const keyword = searchInput.trim().toLowerCase();
@@ -758,6 +801,65 @@ function App() {
 
   const showAllProducts = () => {
     document.getElementById("商品庫存")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  const submitPurchase = async (event) => {
+    event.preventDefault();
+    setError("");
+    try {
+      await api(editingPurchaseId ? `/purchases/${editingPurchaseId}` : "/purchases", {
+        method: editingPurchaseId ? "PUT" : "POST",
+        body: JSON.stringify({
+          ...purchaseForm,
+          productId: Number(purchaseForm.productId),
+          quantity: Number(purchaseForm.quantity),
+          unitCost: Number(purchaseForm.unitCost)
+        })
+      });
+      setPurchaseForm(emptyPurchase);
+      setEditingPurchaseId(null);
+      setAutoSaveStatus("已自動儲存");
+      await load();
+      window.alert(editingPurchaseId ? "進貨單已更新" : "進貨單已建立");
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const editPurchase = (purchase) => {
+    setEditingPurchaseId(purchase.id);
+    setPurchaseForm({
+      supplier: purchase.supplier,
+      purchaseDate: purchase.purchaseDate,
+      productId: String(purchase.productId),
+      quantity: String(purchase.quantity),
+      unit: purchase.unit,
+      unitCost: String(purchase.unitCost),
+      paymentStatus: purchase.paymentStatus,
+      notes: purchase.notes ?? ""
+    });
+  };
+
+  const cancelPurchaseEdit = () => {
+    setEditingPurchaseId(null);
+    setPurchaseForm(emptyPurchase);
+  };
+
+  const voidPurchase = async (purchase) => {
+    const voidReason = window.prompt(`請輸入作廢進貨單 #${purchase.id} 的原因`, "");
+    if (voidReason === null) return;
+    setError("");
+    try {
+      await api(`/purchases/${purchase.id}/void`, {
+        method: "POST",
+        body: JSON.stringify({ voidReason })
+      });
+      setAutoSaveStatus("已自動儲存");
+      await load();
+      window.alert("進貨單已作廢");
+    } catch (err) {
+      setError(err.message);
+    }
   };
 
   const voidSale = async (sale) => {
@@ -1107,9 +1209,9 @@ function App() {
             ) : (
               <>
                 <StatCard icon={CalendarDays} label="今日營業額" value={currency.format(dashboard?.todayRevenue ?? 0)} detail="依銷售日期統計" tone="bg-teal-50 text-teal-700" />
-                <StatCard icon={BarChart3} label="本月營業額" value={currency.format(dashboard?.monthRevenue ?? 0)} detail="當月銷售總額" tone="bg-indigo-50 text-indigo-700" />
-                <StatCard icon={ShoppingCart} label="總銷售量" value={`${number.format(dashboard?.totalSalesQuantity ?? 0)} 單位`} detail="所有銷售紀錄累計" tone="bg-amber-50 text-amber-700" />
-                <StatCard icon={Boxes} label="低庫存商品數" value={number.format(dashboard?.lowStockCount ?? 0)} detail={`庫存總量 ${number.format(dashboard?.totalStock ?? 0)} 單位`} tone="bg-rose-50 text-rose-700" />
+                <StatCard icon={BarChart3} label="今日成本" value={currency.format(dashboard?.todayCost ?? 0)} detail="依平均進貨成本計算" tone="bg-slate-50 text-slate-700" />
+                <StatCard icon={TrendingUp} label="今日毛利" value={currency.format(dashboard?.todayProfit ?? 0)} detail="今日營業額扣除成本" tone="bg-emerald-50 text-emerald-700" />
+                <StatCard icon={Boxes} label="毛利率" value={`${number.format(dashboard?.todayMarginRate ?? 0)}%`} detail={`低庫存 ${number.format(dashboard?.lowStockCount ?? 0)} 項`} tone="bg-cyan-50 text-cyan-700" />
               </>
             )}
           </section>
@@ -1292,11 +1394,7 @@ function App() {
 
                   <section>
                     <h4 className="mb-3 text-sm font-semibold text-slate-700">價格資訊</h4>
-                    <div className="grid gap-3 sm:grid-cols-2 sm:[grid-template-columns:repeat(2,minmax(0,1fr))]">
-                      <label className="grid gap-1 text-sm font-medium text-slate-600">
-                        成本
-                        <TextInput disabled={!isAdmin} required min="0" type="number" value={productForm.cost} onChange={(e) => setProductForm({ ...productForm, cost: e.target.value })} />
-                      </label>
+                    <div className="grid gap-3">
                       <label className="grid gap-1 text-sm font-medium text-slate-600">
                         售價
                         <TextInput disabled={!isAdmin} required min="0" type="number" value={productForm.price} onChange={(e) => setProductForm({ ...productForm, price: e.target.value })} />
@@ -1322,8 +1420,9 @@ function App() {
                         <TextInput disabled={!isAdmin} required placeholder="例如 5 張/包" value={productForm.packageSpec} onChange={(e) => setProductForm({ ...productForm, packageSpec: e.target.value })} />
                       </label>
                       <label className="grid gap-1 text-sm font-medium text-slate-600">
-                        庫存數量
-                        <TextInput disabled={!isAdmin} required min="0" type="number" value={productForm.stock} onChange={(e) => setProductForm({ ...productForm, stock: e.target.value })} />
+                        初始庫存數量
+                        <TextInput disabled={!isAdmin} min="0" type="number" placeholder="預設 0" value={productForm.stock} onChange={(e) => setProductForm({ ...productForm, stock: e.target.value })} />
+                        <span className="text-xs font-normal text-slate-500">正式進貨請使用進貨管理</span>
                       </label>
                       <label className="grid gap-1 text-sm font-medium text-slate-600">
                         低庫存門檻
@@ -1567,6 +1666,148 @@ function App() {
               </div>
             </section>
           )}
+
+          <section id="進貨管理" className="grid min-w-0 gap-6 xl:grid-cols-[minmax(280px,0.8fr)_minmax(0,1.2fr)]">
+            <form onSubmit={submitPurchase} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="mb-4 flex items-center gap-2">
+                <PackagePlus className="h-5 w-5 text-slate-700" />
+                <h2 className="text-lg font-semibold">{editingPurchaseId ? "編輯進貨單" : "新增進貨單"}</h2>
+              </div>
+              {!isAdmin && <p className="mb-4 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-700">店員只能查看進貨紀錄，不能新增、編輯或作廢進貨單。</p>}
+              <div className="grid gap-3">
+                <TextInput disabled={!isAdmin} required placeholder="供應商" value={purchaseForm.supplier} onChange={(e) => setPurchaseForm({ ...purchaseForm, supplier: e.target.value })} />
+                <TextInput disabled={!isAdmin} required type="date" value={purchaseForm.purchaseDate} onChange={(e) => setPurchaseForm({ ...purchaseForm, purchaseDate: e.target.value })} />
+                <SelectInput disabled={!isAdmin} value={purchaseForm.productId} onChange={(e) => {
+                  const product = products.find((item) => item.id === Number(e.target.value));
+                  setPurchaseForm({
+                    ...purchaseForm,
+                    productId: e.target.value,
+                    unit: product?.unit ?? purchaseForm.unit
+                  });
+                }}>
+                  {products.map((product) => <option key={product.id} value={product.id}>{product.name}（目前 {formatStock(product)}）</option>)}
+                </SelectInput>
+                {selectedPurchaseProduct && <p className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-600">{selectedPurchaseProduct.series} · {selectedPurchaseProduct.rarity} · {selectedPurchaseProduct.packageSpec}</p>}
+                <div className="grid grid-cols-2 gap-3">
+                  <TextInput disabled={!isAdmin} required min="1" type="number" placeholder="數量" value={purchaseForm.quantity} onChange={(e) => setPurchaseForm({ ...purchaseForm, quantity: e.target.value })} />
+                  <SelectInput disabled={!isAdmin} value={purchaseForm.unit} onChange={(e) => setPurchaseForm({ ...purchaseForm, unit: e.target.value })}>
+                    {UNIT_OPTIONS.map((unit) => <option key={unit}>{unit}</option>)}
+                  </SelectInput>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <TextInput disabled={!isAdmin} required min="0" type="number" placeholder="單位成本" value={purchaseForm.unitCost} onChange={(e) => setPurchaseForm({ ...purchaseForm, unitCost: e.target.value })} />
+                  <SelectInput disabled={!isAdmin} value={purchaseForm.paymentStatus} onChange={(e) => setPurchaseForm({ ...purchaseForm, paymentStatus: e.target.value })}>
+                    <option>未付款</option>
+                    <option>已付款</option>
+                    <option>部分付款</option>
+                  </SelectInput>
+                </div>
+                <p className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-600">總成本：{currency.format(purchaseTotalCost)}</p>
+                <TextArea disabled={!isAdmin} placeholder="備註" value={purchaseForm.notes} onChange={(e) => setPurchaseForm({ ...purchaseForm, notes: e.target.value })} />
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Button disabled={!isAdmin} type="submit" className="w-full">
+                    <PackagePlus className="h-4 w-4" />
+                    {editingPurchaseId ? "儲存進貨單" : "建立進貨單"}
+                  </Button>
+                  {editingPurchaseId && <Button type="button" variant="secondary" className="w-full sm:w-auto" onClick={cancelPurchaseEdit}>取消</Button>}
+                </div>
+              </div>
+            </form>
+
+            <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div className="flex items-center gap-2">
+                  <PackagePlus className="h-5 w-5 text-slate-700" />
+                  <h2 className="text-lg font-semibold">進貨紀錄</h2>
+                </div>
+                <span className="rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600">{purchases.length} 筆</span>
+              </div>
+              <div className="mb-4 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                <TextInput type="date" value={purchaseFilters.from} onChange={(e) => setPurchaseFilters({ ...purchaseFilters, from: e.target.value })} />
+                <TextInput type="date" value={purchaseFilters.to} onChange={(e) => setPurchaseFilters({ ...purchaseFilters, to: e.target.value })} />
+                <TextInput placeholder="供應商" value={purchaseFilters.supplier} onChange={(e) => setPurchaseFilters({ ...purchaseFilters, supplier: e.target.value })} />
+                <TextInput placeholder="商品名稱" value={purchaseFilters.product} onChange={(e) => setPurchaseFilters({ ...purchaseFilters, product: e.target.value })} />
+                <SelectInput value={purchaseFilters.paymentStatus} onChange={(e) => setPurchaseFilters({ ...purchaseFilters, paymentStatus: e.target.value })}>
+                  <option value="">全部付款狀態</option>
+                  <option>未付款</option>
+                  <option>已付款</option>
+                  <option>部分付款</option>
+                </SelectInput>
+              </div>
+              <div className="hidden overflow-x-auto lg:block">
+                <table className="min-w-full table-auto text-left text-sm">
+                  <thead className="border-b border-slate-200 text-xs text-slate-500">
+                    <tr>
+                      <th className="py-3 pr-4">日期</th>
+                      <th className="py-3 pr-4">供應商</th>
+                      <th className="py-3 pr-4">商品</th>
+                      <th className="py-3 pr-4">數量</th>
+                      <th className="py-3 pr-4">成本</th>
+                      <th className="py-3 pr-4">付款狀態</th>
+                      <th className="py-3 pr-4">建立者</th>
+                      <th className="py-3">操作</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {purchases.map((purchase) => (
+                      <tr key={purchase.id}>
+                        <td className="py-3 pr-4">{purchase.purchaseDate}</td>
+                        <td className="py-3 pr-4">{purchase.supplier}</td>
+                        <td className="py-3 pr-4 font-medium">{purchase.productName}<p className="text-xs text-slate-500">{purchase.productSeries}</p></td>
+                        <td className="py-3 pr-4">{number.format(purchase.quantity)} {purchase.unit}</td>
+                        <td className="py-3 pr-4">{currency.format(purchase.totalCost)}<p className="text-xs text-slate-500">{currency.format(purchase.unitCost)} / {purchase.unit}</p></td>
+                        <td className="py-3 pr-4">
+                          <span className="rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">{purchase.paymentStatus}</span>
+                        </td>
+                        <td className="py-3 pr-4">{purchase.createdByName ?? "-"}</td>
+                        <td className="py-3">
+                          <div className="flex gap-2">
+                            <Button type="button" variant="secondary" disabled={!isAdmin} onClick={() => editPurchase(purchase)}>
+                              <Edit3 className="h-4 w-4" />
+                            </Button>
+                            <Button type="button" variant="danger" disabled={!isAdmin} onClick={() => voidPurchase(purchase)}>
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                    {purchases.length === 0 && (
+                      <tr>
+                        <td className="py-6 text-center text-slate-500" colSpan="8">尚無進貨紀錄</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <div className="grid gap-3 lg:hidden">
+                {purchases.map((purchase) => (
+                  <article key={purchase.id} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="font-semibold">{purchase.productName}</p>
+                        <p className="mt-1 text-sm text-slate-500">{purchase.supplier} · {purchase.purchaseDate}</p>
+                        <p className="mt-1 text-sm text-slate-500">{number.format(purchase.quantity)} {purchase.unit} · {purchase.paymentStatus}</p>
+                      </div>
+                      <p className="font-semibold">{currency.format(purchase.totalCost)}</p>
+                    </div>
+                    <div className="mt-3 flex items-center justify-between gap-2">
+                      <p className="text-sm text-slate-500">{purchase.createdByName ?? "-"}</p>
+                      <div className="flex gap-2">
+                        <Button type="button" variant="secondary" disabled={!isAdmin} onClick={() => editPurchase(purchase)}>
+                          <Edit3 className="h-4 w-4" />
+                        </Button>
+                        <Button type="button" variant="danger" disabled={!isAdmin} onClick={() => voidPurchase(purchase)}>
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  </article>
+                ))}
+                {purchases.length === 0 && <p className="py-6 text-center text-slate-500">尚無進貨紀錄</p>}
+              </div>
+            </div>
+          </section>
 
           <section className="hidden rounded-lg border border-slate-200 bg-white p-4 shadow-sm lg:block">
             <div className="mb-4 flex items-center justify-between gap-3">

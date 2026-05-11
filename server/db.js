@@ -124,6 +124,7 @@ export async function initDb() {
         cards_per_unit INTEGER NOT NULL DEFAULT 1,
         package_spec TEXT NOT NULL DEFAULT '單張卡',
         cost NUMERIC NOT NULL,
+        average_cost NUMERIC NOT NULL DEFAULT 0,
         price NUMERIC NOT NULL,
         stock INTEGER NOT NULL DEFAULT 0,
         low_stock_threshold INTEGER NOT NULL DEFAULT 3,
@@ -163,12 +164,31 @@ export async function initDb() {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
 
+      CREATE TABLE IF NOT EXISTS purchases (
+        id SERIAL PRIMARY KEY,
+        supplier TEXT NOT NULL,
+        purchase_date DATE NOT NULL,
+        product_id INTEGER NOT NULL REFERENCES products(id),
+        quantity INTEGER NOT NULL,
+        unit TEXT NOT NULL DEFAULT '單張',
+        unit_cost NUMERIC NOT NULL,
+        total_cost NUMERIC NOT NULL,
+        payment_status TEXT NOT NULL CHECK (payment_status IN ('未付款', '已付款', '部分付款')),
+        notes TEXT NOT NULL DEFAULT '',
+        created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        voided_at TIMESTAMPTZ,
+        voided_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        void_reason TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
       CREATE TABLE IF NOT EXISTS audit_logs (
         id SERIAL PRIMARY KEY,
         user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
         username TEXT NOT NULL,
         action_type TEXT NOT NULL CHECK (action_type IN ('create', 'update', 'delete', 'restore')),
-        entity_type TEXT NOT NULL CHECK (entity_type IN ('product', 'sale', 'user', 'inventory')),
+        entity_type TEXT NOT NULL CHECK (entity_type IN ('product', 'sale', 'user', 'inventory', 'purchase')),
         before_data JSONB,
         after_data JSONB,
         undone_at TIMESTAMPTZ,
@@ -183,6 +203,7 @@ export async function initDb() {
     await client.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS unit TEXT NOT NULL DEFAULT '單張'");
     await client.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS cards_per_unit INTEGER NOT NULL DEFAULT 1");
     await client.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS package_spec TEXT NOT NULL DEFAULT '單張卡'");
+    await client.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS average_cost NUMERIC NOT NULL DEFAULT 0");
     await client.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ");
     await client.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS deleted_by INTEGER REFERENCES users(id) ON DELETE SET NULL");
     await client.query("ALTER TABLE sales ADD COLUMN IF NOT EXISTS sale_unit TEXT NOT NULL DEFAULT '單張'");
@@ -190,10 +211,13 @@ export async function initDb() {
     await client.query("ALTER TABLE sales ADD COLUMN IF NOT EXISTS voided_at TIMESTAMPTZ");
     await client.query("ALTER TABLE sales ADD COLUMN IF NOT EXISTS voided_by INTEGER REFERENCES users(id) ON DELETE SET NULL");
     await client.query("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS undone_at TIMESTAMPTZ");
+    await client.query("ALTER TABLE audit_logs DROP CONSTRAINT IF EXISTS audit_logs_entity_type_check");
+    await client.query("ALTER TABLE audit_logs ADD CONSTRAINT audit_logs_entity_type_check CHECK (entity_type IN ('product', 'sale', 'user', 'inventory', 'purchase'))");
 
     await client.query("UPDATE products SET unit = '單張' WHERE unit IS NULL OR unit = ''");
     await client.query("UPDATE products SET cards_per_unit = 1 WHERE cards_per_unit IS NULL OR cards_per_unit <= 0");
     await client.query("UPDATE products SET package_spec = '單張卡' WHERE package_spec IS NULL OR package_spec = ''");
+    await client.query("UPDATE products SET average_cost = cost WHERE average_cost IS NULL OR average_cost = 0");
     await client.query("UPDATE sales SET sale_unit = '單張' WHERE sale_unit IS NULL OR sale_unit = ''");
     await client.query("UPDATE sales SET cards_per_unit = 1 WHERE cards_per_unit IS NULL OR cards_per_unit <= 0");
     await client.query("UPDATE users SET display_name = name WHERE display_name IS NULL OR display_name = ''");

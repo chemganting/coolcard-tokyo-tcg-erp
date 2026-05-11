@@ -14,12 +14,13 @@ const app = express();
 const port = process.env.PORT ?? 4000;
 const jwtSecret = process.env.JWT_SECRET ?? "local-development-secret-change-me";
 const allowedUnits = new Set(["單張", "包", "盒", "箱", "組", "其他"]);
+const paymentStatuses = new Set(["未付款", "已付款", "部分付款"]);
 const reportSheetTabs = ["今日營收", "庫存總表", "熱銷排行"];
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const backupDir = process.env.BACKUP_DIR
   ? path.resolve(process.env.BACKUP_DIR)
   : path.join(__dirname, "backups");
-const backupTables = ["users", "products", "sales", "audit_logs", "inventory_logs"];
+const backupTables = ["users", "products", "sales", "audit_logs", "inventory_logs", "purchases"];
 
 function publicUser(row) {
   const user = toCamel(row);
@@ -84,10 +85,10 @@ function productPayload(body) {
     unit: allowedUnits.has(String(body.unit ?? "").trim()) ? String(body.unit).trim() : "其他",
     cardsPerUnit: Number(body.cardsPerUnit),
     packageSpec: String(body.packageSpec ?? "").trim(),
-    cost: Number(body.cost),
+    cost: Number(body.cost ?? 0),
     price: Number(body.price),
-    stock: Number(body.stock),
-    lowStockThreshold: Number(body.lowStockThreshold),
+    stock: Number(body.stock ?? 0),
+    lowStockThreshold: Number(body.lowStockThreshold ?? 3),
     notes: String(body.notes ?? "").trim()
   };
 }
@@ -103,8 +104,40 @@ function validateProduct(product) {
     product.lowStockThreshold >= 0;
 }
 
+function purchasePayload(body) {
+  const quantity = Number(body.quantity);
+  const unitCost = Number(body.unitCost);
+  return {
+    supplier: String(body.supplier ?? "").trim(),
+    purchaseDate: String(body.purchaseDate ?? "").trim() || new Date().toISOString().slice(0, 10),
+    productId: Number(body.productId),
+    quantity,
+    unit: allowedUnits.has(String(body.unit ?? "").trim()) ? String(body.unit).trim() : "其他",
+    unitCost,
+    totalCost: Number.isFinite(quantity) && Number.isFinite(unitCost) ? quantity * unitCost : NaN,
+    paymentStatus: paymentStatuses.has(String(body.paymentStatus ?? "").trim()) ? String(body.paymentStatus).trim() : "未付款",
+    notes: String(body.notes ?? "").trim()
+  };
+}
+
+function validatePurchase(purchase) {
+  return Boolean(
+    purchase.supplier &&
+    purchase.productId &&
+    purchase.purchaseDate &&
+    Number.isFinite(purchase.quantity) &&
+    purchase.quantity > 0 &&
+    Number.isFinite(purchase.unitCost) &&
+    purchase.unitCost >= 0
+  );
+}
+
 function grossMargin(revenue, cost) {
   return revenue === 0 ? 0 : ((revenue - cost) / revenue) * 100;
+}
+
+function productCostExpression() {
+  return "COALESCE(NULLIF(products.average_cost, 0), products.cost)";
 }
 
 async function getProfitReport() {
@@ -119,7 +152,7 @@ async function getProfitReport() {
     query(`
       SELECT
         COALESCE(SUM(sales.total), 0)::float AS revenue,
-        COALESCE(SUM(products.cost * sales.quantity), 0)::float AS cost,
+        COALESCE(SUM(COALESCE(NULLIF(products.average_cost, 0), products.cost) * sales.quantity), 0)::float AS cost,
         COALESCE(SUM(sales.quantity), 0)::int AS quantity
       FROM sales
       JOIN products ON products.id = sales.product_id
@@ -129,7 +162,7 @@ async function getProfitReport() {
     query(`
       SELECT
         COALESCE(SUM(sales.total), 0)::float AS revenue,
-        COALESCE(SUM(products.cost * sales.quantity), 0)::float AS cost
+        COALESCE(SUM(COALESCE(NULLIF(products.average_cost, 0), products.cost) * sales.quantity), 0)::float AS cost
       FROM sales
       JOIN products ON products.id = sales.product_id
       WHERE date_trunc('month', sales.sold_at) = date_trunc('month', CURRENT_DATE)
@@ -142,9 +175,9 @@ async function getProfitReport() {
         sales.quantity,
         sales.unit_price::float AS unit_price,
         sales.total::float AS total,
-        (products.cost * sales.quantity)::float AS cost,
-        (sales.total - products.cost * sales.quantity)::float AS profit,
-        CASE WHEN sales.total = 0 THEN 0 ELSE ((sales.total - products.cost * sales.quantity) / sales.total * 100)::float END AS margin_rate,
+        (COALESCE(NULLIF(products.average_cost, 0), products.cost) * sales.quantity)::float AS cost,
+        (sales.total - COALESCE(NULLIF(products.average_cost, 0), products.cost) * sales.quantity)::float AS profit,
+        CASE WHEN sales.total = 0 THEN 0 ELSE ((sales.total - COALESCE(NULLIF(products.average_cost, 0), products.cost) * sales.quantity) / sales.total * 100)::float END AS margin_rate,
         users.name AS staff_name
       FROM sales
       JOIN products ON products.id = sales.product_id
@@ -161,10 +194,11 @@ async function getProfitReport() {
         condition,
         unit,
         package_spec,
-        cost::float AS cost,
+        COALESCE(NULLIF(average_cost, 0), cost)::float AS cost,
+        average_cost::float AS average_cost,
         price::float AS price,
         stock,
-        (cost * stock)::float AS inventory_cost,
+        (COALESCE(NULLIF(average_cost, 0), cost) * stock)::float AS inventory_cost,
         (price * stock)::float AS inventory_price,
         ((price - cost) * stock)::float AS estimated_profit
       FROM products
@@ -176,10 +210,10 @@ async function getProfitReport() {
         products.name AS product_name,
         COALESCE(SUM(sales.quantity), 0)::int AS quantity,
         COALESCE(SUM(sales.total), 0)::float AS revenue,
-        COALESCE(SUM(products.cost * sales.quantity), 0)::float AS cost,
-        COALESCE(SUM(sales.total - products.cost * sales.quantity), 0)::float AS profit,
+        COALESCE(SUM(COALESCE(NULLIF(products.average_cost, 0), products.cost) * sales.quantity), 0)::float AS cost,
+        COALESCE(SUM(sales.total - COALESCE(NULLIF(products.average_cost, 0), products.cost) * sales.quantity), 0)::float AS profit,
         CASE WHEN COALESCE(SUM(sales.total), 0) = 0 THEN 0
-             ELSE (SUM(sales.total - products.cost * sales.quantity) / SUM(sales.total) * 100)::float
+             ELSE (SUM(sales.total - COALESCE(NULLIF(products.average_cost, 0), products.cost) * sales.quantity) / SUM(sales.total) * 100)::float
         END AS margin_rate
       FROM sales
       JOIN products ON products.id = sales.product_id
@@ -369,8 +403,15 @@ async function backupFilePath(filename) {
 }
 
 async function getDashboardSnapshot() {
-  const [todayRevenue, monthRevenue, totalSalesQuantity, lowStockCount, totalProductCount, totalStock, hotProducts, inventoryOverview] = await Promise.all([
-    query("SELECT COALESCE(SUM(total), 0)::float AS value FROM sales WHERE sold_at = CURRENT_DATE AND voided_at IS NULL"),
+    const [todaySummary, monthRevenue, totalSalesQuantity, lowStockCount, totalProductCount, totalStock, hotProducts, inventoryOverview] = await Promise.all([
+      query(`
+        SELECT
+          COALESCE(SUM(sales.total), 0)::float AS revenue,
+          COALESCE(SUM(COALESCE(NULLIF(products.average_cost, 0), products.cost) * sales.quantity), 0)::float AS cost
+        FROM sales
+        JOIN products ON products.id = sales.product_id
+        WHERE sales.sold_at = CURRENT_DATE AND sales.voided_at IS NULL
+      `),
     query("SELECT COALESCE(SUM(total), 0)::float AS value FROM sales WHERE date_trunc('month', sold_at) = date_trunc('month', CURRENT_DATE) AND voided_at IS NULL"),
     query("SELECT COALESCE(SUM(quantity), 0)::int AS value FROM sales WHERE voided_at IS NULL"),
     query("SELECT COUNT(*)::int AS value FROM products WHERE deleted_at IS NULL AND stock <= low_stock_threshold"),
@@ -395,7 +436,10 @@ async function getDashboardSnapshot() {
   ]);
 
   return {
-    todayRevenue: todayRevenue.rows[0].value,
+      todayRevenue: todaySummary.rows[0].revenue,
+      todayCost: todaySummary.rows[0].cost,
+      todayProfit: todaySummary.rows[0].revenue - todaySummary.rows[0].cost,
+      todayMarginRate: grossMargin(todaySummary.rows[0].revenue, todaySummary.rows[0].cost),
     monthRevenue: monthRevenue.rows[0].value,
     totalSalesQuantity: totalSalesQuantity.rows[0].value,
     lowStockCount: lowStockCount.rows[0].value,
@@ -408,7 +452,7 @@ async function getDashboardSnapshot() {
 
 async function createDatabaseBackup(type = "manual") {
   const normalizedType = type === "auto" ? "auto" : "manual";
-  const [schemaRows, users, products, sales, auditLogs, inventoryLogs, inventory, dashboard, profitReport] = await Promise.all([
+  const [schemaRows, users, products, sales, auditLogs, inventoryLogs, purchases, inventory, dashboard, profitReport] = await Promise.all([
     query(`
       SELECT table_name, column_name, data_type, is_nullable, column_default
       FROM information_schema.columns
@@ -417,7 +461,7 @@ async function createDatabaseBackup(type = "manual") {
     `, [backupTables]),
     query("SELECT id, username, password_hash, name, display_name, role, is_active, created_at, updated_at FROM users ORDER BY id"),
     query(`
-      SELECT id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost::text, price::text, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at
+      SELECT id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost::text, average_cost::text, price::text, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at
       FROM products
       ORDER BY id
     `),
@@ -437,7 +481,13 @@ async function createDatabaseBackup(type = "manual") {
       ORDER BY id
     `),
     query(`
-      SELECT id, name, series, rarity, condition, unit, cards_per_unit, package_spec, stock, low_stock_threshold, (cost * stock)::float AS inventory_cost, (price * stock)::float AS inventory_price
+      SELECT id, supplier, purchase_date, product_id, quantity, unit, unit_cost::text, total_cost::text, payment_status, notes,
+             created_by, voided_at, voided_by, void_reason, created_at, updated_at
+      FROM purchases
+      ORDER BY id
+    `),
+    query(`
+      SELECT id, name, series, rarity, condition, unit, cards_per_unit, package_spec, stock, low_stock_threshold, (COALESCE(NULLIF(average_cost, 0), cost) * stock)::float AS inventory_cost, (price * stock)::float AS inventory_price
       FROM products
       WHERE deleted_at IS NULL
       ORDER BY name ASC
@@ -465,7 +515,8 @@ async function createDatabaseBackup(type = "manual") {
       products: products.rows,
       sales: sales.rows,
       audit_logs: auditLogs.rows,
-      inventory_logs: inventoryLogs.rows
+      inventory_logs: inventoryLogs.rows,
+      purchases: purchases.rows
     },
     inventory: rowsToCamel(inventory.rows),
     reports: {
@@ -534,7 +585,7 @@ async function restoreDatabaseBackup(filename) {
 
   try {
     await client.query("BEGIN");
-    await client.query("TRUNCATE TABLE inventory_logs, audit_logs, sales, products, users RESTART IDENTITY CASCADE");
+    await client.query("TRUNCATE TABLE inventory_logs, audit_logs, purchases, sales, products, users RESTART IDENTITY CASCADE");
 
     for (const user of data.users ?? []) {
       await client.query(
@@ -550,8 +601,8 @@ async function restoreDatabaseBackup(filename) {
       await client.query(
         `
           INSERT INTO products
-            (id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost, price, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::numeric, $10::numeric, $11, $12, $13, $14::timestamptz, $15, COALESCE($16::timestamptz, NOW()), COALESCE($17::timestamptz, NOW()))
+            (id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost, average_cost, price, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::numeric, $10::numeric, $11::numeric, $12, $13, $14, $15::timestamptz, $16, COALESCE($17::timestamptz, NOW()), COALESCE($18::timestamptz, NOW()))
         `,
         [
           product.id,
@@ -563,6 +614,7 @@ async function restoreDatabaseBackup(filename) {
           product.cards_per_unit ?? 1,
           product.package_spec ?? "單張卡",
           product.cost,
+          product.average_cost ?? product.averageCost ?? product.cost ?? 0,
           product.price,
           product.stock ?? 0,
           product.low_stock_threshold ?? 3,
@@ -640,6 +692,34 @@ async function restoreDatabaseBackup(filename) {
       );
     }
 
+    for (const purchase of data.purchases ?? []) {
+      await client.query(
+        `
+          INSERT INTO purchases
+            (id, supplier, purchase_date, product_id, quantity, unit, unit_cost, total_cost, payment_status, notes, created_by, voided_at, voided_by, void_reason, created_at, updated_at)
+          VALUES ($1, $2, $3::date, (SELECT id FROM products WHERE id = $4), $5, $6, $7::numeric, $8::numeric, $9, $10, (SELECT id FROM users WHERE id = $11), $12::timestamptz, (SELECT id FROM users WHERE id = $13), $14, COALESCE($15::timestamptz, NOW()), COALESCE($16::timestamptz, NOW()))
+        `,
+        [
+          purchase.id,
+          purchase.supplier,
+          purchase.purchase_date,
+          purchase.product_id,
+          purchase.quantity,
+          purchase.unit ?? "單張",
+          purchase.unit_cost,
+          purchase.total_cost,
+          purchase.payment_status ?? "未付款",
+          purchase.notes ?? "",
+          purchase.created_by,
+          purchase.voided_at,
+          purchase.voided_by,
+          purchase.void_reason,
+          purchase.created_at,
+          purchase.updated_at
+        ]
+      );
+    }
+
     const adminCount = await client.query("SELECT COUNT(*)::int AS count FROM users WHERE role = 'admin' AND is_active = TRUE");
     if (adminCount.rows[0].count === 0) {
       const adminPasswordHash = bcrypt.hashSync(process.env.ADMIN_PASSWORD ?? "admin123", 12);
@@ -690,7 +770,7 @@ async function clearDemoData() {
   try {
     await client.query("BEGIN");
 
-    const tables = ["audit_logs", "sales", "products"];
+    const tables = ["audit_logs", "purchases", "sales", "products"];
     if (await tableExists("inventory_logs")) tables.unshift("inventory_logs");
 
     await client.query(`TRUNCATE TABLE ${tables.join(", ")} RESTART IDENTITY CASCADE`);
@@ -759,7 +839,7 @@ async function writeInventoryLog(client, request, productId, actionType, quantit
 async function productById(client, id) {
   const { rows } = await client.query(
     `
-      SELECT id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost::text, price::text, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at
+      SELECT id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost::text, average_cost::text, price::text, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at
       FROM products
       WHERE id = $1
     `,
@@ -780,6 +860,36 @@ async function saleById(client, id) {
   return rows[0] ?? null;
 }
 
+async function purchaseById(client, id) {
+  const { rows } = await client.query(
+    `
+      SELECT id, supplier, purchase_date, product_id, quantity, unit, unit_cost::text, total_cost::text,
+             payment_status, notes, created_by, voided_at, voided_by, void_reason, created_at, updated_at
+      FROM purchases
+      WHERE id = $1
+    `,
+    [id]
+  );
+  return rows[0] ?? null;
+}
+
+async function recalculateAverageCost(client, productId) {
+  const { rows } = await client.query(
+    `
+      SELECT
+        COALESCE(SUM(quantity * unit_cost), 0)::numeric AS total_cost,
+        COALESCE(SUM(quantity), 0)::numeric AS total_quantity
+      FROM purchases
+      WHERE product_id = $1 AND voided_at IS NULL
+    `,
+    [productId]
+  );
+  const totalQuantity = Number(rows[0].total_quantity);
+  const averageCost = totalQuantity > 0 ? Number(rows[0].total_cost) / totalQuantity : 0;
+  await client.query("UPDATE products SET average_cost = $1, cost = $1, updated_at = NOW() WHERE id = $2", [averageCost, productId]);
+  return averageCost;
+}
+
 async function userById(client, id) {
   const { rows } = await client.query(
     "SELECT id, username, password_hash, name, display_name, role, is_active, created_at, updated_at FROM users WHERE id = $1",
@@ -792,8 +902,8 @@ async function restoreProductSnapshot(client, product) {
   await client.query(
     `
       INSERT INTO products
-        (id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost, price, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::numeric, $10::numeric, $11, $12, $13, $14::timestamptz, $15, COALESCE($16::timestamptz, NOW()), COALESCE($17::timestamptz, NOW()))
+        (id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost, average_cost, price, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::numeric, $10::numeric, $11::numeric, $12, $13, $14, $15::timestamptz, $16, COALESCE($17::timestamptz, NOW()), COALESCE($18::timestamptz, NOW()))
       ON CONFLICT (id) DO UPDATE SET
         name = EXCLUDED.name,
         series = EXCLUDED.series,
@@ -803,6 +913,7 @@ async function restoreProductSnapshot(client, product) {
         cards_per_unit = EXCLUDED.cards_per_unit,
         package_spec = EXCLUDED.package_spec,
         cost = EXCLUDED.cost,
+        average_cost = EXCLUDED.average_cost,
         price = EXCLUDED.price,
         stock = EXCLUDED.stock,
         low_stock_threshold = EXCLUDED.low_stock_threshold,
@@ -821,6 +932,7 @@ async function restoreProductSnapshot(client, product) {
       product.cards_per_unit ?? 1,
       product.package_spec ?? "單張卡",
       product.cost,
+      product.average_cost ?? product.averageCost ?? product.cost ?? 0,
       product.price,
       product.stock ?? 0,
       product.low_stock_threshold ?? 3,
@@ -1161,7 +1273,7 @@ app.post("/api/products", currentUser, requireAdmin, async (request, response, n
         INSERT INTO products
           (name, series, rarity, condition, unit, cards_per_unit, package_spec, cost, price, stock, low_stock_threshold, notes)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-        RETURNING id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost::text, price::text, stock, low_stock_threshold, notes, created_at, updated_at
+        RETURNING id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost::text, average_cost::text, price::text, stock, low_stock_threshold, notes, created_at, updated_at
       `,
       [
         product.name,
@@ -1224,7 +1336,7 @@ app.put("/api/products/:id", currentUser, requireAdmin, async (request, response
             notes = $12,
             updated_at = NOW()
         WHERE id = $13
-        RETURNING id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost::text, price::text, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at
+        RETURNING id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost::text, average_cost::text, price::text, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at
       `,
       [
         product.name,
@@ -1275,7 +1387,7 @@ app.delete("/api/products/:id", currentUser, requireAdmin, async (request, respo
         UPDATE products
         SET deleted_at = NOW(), deleted_by = $1, updated_at = NOW()
         WHERE id = $2 AND deleted_at IS NULL
-        RETURNING id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost::text, price::text, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at
+        RETURNING id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost::text, average_cost::text, price::text, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at
       `,
       [request.user.id, request.params.id]
     );
@@ -1313,7 +1425,7 @@ app.patch("/api/products/:id/restore", currentUser, requireAdmin, async (request
         UPDATE products
         SET deleted_at = NULL, deleted_by = NULL, updated_at = NOW()
         WHERE id = $1
-        RETURNING id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost::text, price::text, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at
+        RETURNING id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost::text, average_cost::text, price::text, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at
       `,
       [request.params.id]
     );
@@ -1519,7 +1631,7 @@ app.post("/api/products/import", currentUser, requireAdmin, async (request, resp
           INSERT INTO products
             (name, series, rarity, condition, unit, cards_per_unit, package_spec, cost, price, stock, low_stock_threshold, notes)
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-          RETURNING id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost::text, price::text, stock, low_stock_threshold, notes, created_at, updated_at
+          RETURNING id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost::text, average_cost::text, price::text, stock, low_stock_threshold, notes, created_at, updated_at
         `,
         [
           product.name,
@@ -1554,6 +1666,239 @@ app.post("/api/products/import", currentUser, requireAdmin, async (request, resp
     client.release();
   }
 });
+
+app.get("/api/purchases", currentUser, async (request, response, next) => {
+  const params = [];
+  const filters = ["purchases.voided_at IS NULL"];
+  if (request.query.from) {
+    params.push(request.query.from);
+    filters.push(`purchases.purchase_date >= $${params.length}::date`);
+  }
+  if (request.query.to) {
+    params.push(request.query.to);
+    filters.push(`purchases.purchase_date <= $${params.length}::date`);
+  }
+  if (request.query.supplier) {
+    params.push(`%${String(request.query.supplier).trim()}%`);
+    filters.push(`purchases.supplier ILIKE $${params.length}`);
+  }
+  if (request.query.product) {
+    params.push(`%${String(request.query.product).trim()}%`);
+    filters.push(`products.name ILIKE $${params.length}`);
+  }
+  if (request.query.paymentStatus && paymentStatuses.has(String(request.query.paymentStatus))) {
+    params.push(request.query.paymentStatus);
+    filters.push(`purchases.payment_status = $${params.length}`);
+  }
+
+  try {
+    const { rows } = await query(
+      `
+        SELECT purchases.id, purchases.supplier, to_char(purchases.purchase_date, 'YYYY-MM-DD') AS purchase_date,
+               purchases.product_id, products.name AS product_name, products.series AS product_series,
+               purchases.quantity, purchases.unit, purchases.unit_cost::float AS unit_cost,
+               purchases.total_cost::float AS total_cost, purchases.payment_status, purchases.notes,
+               purchases.created_by, users.name AS created_by_name, purchases.created_at, purchases.updated_at,
+               purchases.voided_at, purchases.voided_by, purchases.void_reason
+        FROM purchases
+        JOIN products ON products.id = purchases.product_id
+        LEFT JOIN users ON users.id = purchases.created_by
+        WHERE ${filters.join(" AND ")}
+        ORDER BY purchases.purchase_date DESC, purchases.id DESC
+        LIMIT 200
+      `,
+      params
+    );
+    response.json(rowsToCamel(rows));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/purchases/:id", currentUser, async (request, response, next) => {
+  try {
+    const { rows } = await query(
+      `
+        SELECT purchases.id, purchases.supplier, to_char(purchases.purchase_date, 'YYYY-MM-DD') AS purchase_date,
+               purchases.product_id, products.name AS product_name, products.series AS product_series,
+               purchases.quantity, purchases.unit, purchases.unit_cost::float AS unit_cost,
+               purchases.total_cost::float AS total_cost, purchases.payment_status, purchases.notes,
+               purchases.created_by, users.name AS created_by_name, purchases.created_at, purchases.updated_at,
+               purchases.voided_at, purchases.voided_by, purchases.void_reason
+        FROM purchases
+        JOIN products ON products.id = purchases.product_id
+        LEFT JOIN users ON users.id = purchases.created_by
+        WHERE purchases.id = $1
+      `,
+      [request.params.id]
+    );
+    if (!rows[0]) return response.status(404).json({ message: "進貨單不存在" });
+    response.json(toCamel(rows[0]));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/purchases", currentUser, requireAdmin, async (request, response, next) => {
+  const purchase = purchasePayload(request.body);
+  if (!validatePurchase(purchase)) return response.status(400).json({ message: "進貨資料不完整或格式錯誤" });
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const productResult = await client.query(
+      "SELECT id, name, stock, average_cost::float AS average_cost, cost::float AS cost, deleted_at FROM products WHERE id = $1 FOR UPDATE",
+      [purchase.productId]
+    );
+    const product = productResult.rows[0];
+    if (!product || product.deleted_at) {
+      await client.query("ROLLBACK");
+      return response.status(404).json({ message: "商品不存在" });
+    }
+
+    const inserted = await client.query(
+      `
+        INSERT INTO purchases (supplier, purchase_date, product_id, quantity, unit, unit_cost, total_cost, payment_status, notes, created_by)
+        VALUES ($1, $2::date, $3, $4, $5, $6, $7, $8, $9, $10)
+        RETURNING id, supplier, purchase_date, product_id, quantity, unit, unit_cost::text, total_cost::text, payment_status, notes, created_by, voided_at, voided_by, void_reason, created_at, updated_at
+      `,
+      [purchase.supplier, purchase.purchaseDate, purchase.productId, purchase.quantity, purchase.unit, purchase.unitCost, purchase.totalCost, purchase.paymentStatus, purchase.notes, request.user.id]
+    );
+    const stockBefore = product.stock;
+    const stockAfter = stockBefore + purchase.quantity;
+    await client.query("UPDATE products SET stock = $1, updated_at = NOW() WHERE id = $2", [stockAfter, purchase.productId]);
+    await recalculateAverageCost(client, purchase.productId);
+    const afterProduct = await productById(client, purchase.productId);
+    await writeInventoryLog(client, request, purchase.productId, "purchase", purchase.quantity, stockBefore, stockAfter, "purchase", inserted.rows[0].id, "新增進貨單增加庫存");
+    await writeAuditLog(client, request, "create", "purchase", null, { purchase: inserted.rows[0], product: afterProduct });
+    await client.query("COMMIT");
+    response.status(201).json({ id: inserted.rows[0].id });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+app.put("/api/purchases/:id", currentUser, requireAdmin, async (request, response, next) => {
+  const purchase = purchasePayload(request.body);
+  if (!validatePurchase(purchase)) return response.status(400).json({ message: "進貨資料不完整或格式錯誤" });
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const before = await purchaseById(client, Number(request.params.id));
+    if (!before || before.voided_at) {
+      await client.query("ROLLBACK");
+      return response.status(404).json({ message: "進貨單不存在" });
+    }
+
+    const productIds = [...new Set([before.product_id, purchase.productId])];
+    const lockedProducts = await client.query(
+      "SELECT id, stock FROM products WHERE id = ANY($1) AND deleted_at IS NULL FOR UPDATE",
+      [productIds]
+    );
+    if (lockedProducts.rowCount !== productIds.length) {
+      await client.query("ROLLBACK");
+      return response.status(404).json({ message: "商品不存在" });
+    }
+    const productByIdMap = new Map(lockedProducts.rows.map((product) => [product.id, product]));
+
+    if (before.product_id === purchase.productId) {
+      const product = productByIdMap.get(purchase.productId);
+      const diff = purchase.quantity - before.quantity;
+      const stockAfter = product.stock + diff;
+      if (stockAfter < 0) {
+        await client.query("ROLLBACK");
+        return response.status(409).json({ message: "庫存不足，無法修改進貨單" });
+      }
+      await client.query("UPDATE products SET stock = $1, updated_at = NOW() WHERE id = $2", [stockAfter, purchase.productId]);
+      if (diff !== 0) await writeInventoryLog(client, request, purchase.productId, "purchase_update", diff, product.stock, stockAfter, "purchase", before.id, "編輯進貨單調整庫存");
+    } else {
+      const oldProduct = productByIdMap.get(before.product_id);
+      const newProduct = productByIdMap.get(purchase.productId);
+      const oldStockAfter = oldProduct.stock - before.quantity;
+      if (oldStockAfter < 0) {
+        await client.query("ROLLBACK");
+        return response.status(409).json({ message: "原商品庫存不足，無法修改進貨單" });
+      }
+      await client.query("UPDATE products SET stock = $1, updated_at = NOW() WHERE id = $2", [oldStockAfter, before.product_id]);
+      await client.query("UPDATE products SET stock = $1, updated_at = NOW() WHERE id = $2", [newProduct.stock + purchase.quantity, purchase.productId]);
+      await writeInventoryLog(client, request, before.product_id, "purchase_update", -before.quantity, oldProduct.stock, oldStockAfter, "purchase", before.id, "編輯進貨單移出原商品庫存");
+      await writeInventoryLog(client, request, purchase.productId, "purchase_update", purchase.quantity, newProduct.stock, newProduct.stock + purchase.quantity, "purchase", before.id, "編輯進貨單移入新商品庫存");
+    }
+
+    const updated = await client.query(
+      `
+        UPDATE purchases
+        SET supplier = $1, purchase_date = $2::date, product_id = $3, quantity = $4, unit = $5,
+            unit_cost = $6, total_cost = $7, payment_status = $8, notes = $9, updated_at = NOW()
+        WHERE id = $10
+        RETURNING id, supplier, purchase_date, product_id, quantity, unit, unit_cost::text, total_cost::text, payment_status, notes, created_by, voided_at, voided_by, void_reason, created_at, updated_at
+      `,
+      [purchase.supplier, purchase.purchaseDate, purchase.productId, purchase.quantity, purchase.unit, purchase.unitCost, purchase.totalCost, purchase.paymentStatus, purchase.notes, request.params.id]
+    );
+    await recalculateAverageCost(client, before.product_id);
+    if (before.product_id !== purchase.productId) await recalculateAverageCost(client, purchase.productId);
+    await writeAuditLog(client, request, "update", "purchase", before, updated.rows[0]);
+    await client.query("COMMIT");
+    response.json({ ok: true });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+async function voidPurchase(request, response, next) {
+  const reason = String(request.body?.voidReason ?? request.body?.reason ?? "").trim();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const before = await purchaseById(client, Number(request.params.id));
+    if (!before || before.voided_at) {
+      await client.query("ROLLBACK");
+      return response.status(404).json({ message: "進貨單不存在" });
+    }
+    const productResult = await client.query("SELECT id, stock FROM products WHERE id = $1 FOR UPDATE", [before.product_id]);
+    const product = productResult.rows[0];
+    if (!product) {
+      await client.query("ROLLBACK");
+      return response.status(404).json({ message: "商品不存在" });
+    }
+    const stockAfter = product.stock - before.quantity;
+    if (stockAfter < 0) {
+      await client.query("ROLLBACK");
+      return response.status(409).json({ message: "庫存不足，無法作廢進貨單" });
+    }
+
+    await client.query("UPDATE products SET stock = $1, updated_at = NOW() WHERE id = $2", [stockAfter, before.product_id]);
+    const voided = await client.query(
+      `
+        UPDATE purchases
+        SET voided_at = NOW(), voided_by = $1, void_reason = $2, updated_at = NOW()
+        WHERE id = $3
+        RETURNING id, supplier, purchase_date, product_id, quantity, unit, unit_cost::text, total_cost::text, payment_status, notes, created_by, voided_at, voided_by, void_reason, created_at, updated_at
+      `,
+      [request.user.id, reason, request.params.id]
+    );
+    await recalculateAverageCost(client, before.product_id);
+    await writeInventoryLog(client, request, before.product_id, "purchase_void", -before.quantity, product.stock, stockAfter, "purchase", before.id, "作廢進貨單回扣庫存");
+    await writeAuditLog(client, request, "delete", "purchase", before, voided.rows[0]);
+    await client.query("COMMIT");
+    response.json({ ok: true });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    next(error);
+  } finally {
+    client.release();
+  }
+}
+
+app.post("/api/purchases/:id/void", currentUser, requireAdmin, voidPurchase);
+app.delete("/api/purchases/:id", currentUser, requireAdmin, voidPurchase);
 
 app.get("/api/sales", currentUser, async (request, response, next) => {
   const { from, to } = request.query;
@@ -1618,7 +1963,7 @@ app.post("/api/sales", currentUser, async (request, response, next) => {
   try {
     await client.query("BEGIN");
     const productResult = await client.query(
-      "SELECT id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost::text, price::text, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at FROM products WHERE id = $1 FOR UPDATE",
+      "SELECT id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost::text, average_cost::text, price::text, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at FROM products WHERE id = $1 FOR UPDATE",
       [productId]
     );
     const product = productResult.rows[0];
@@ -1731,7 +2076,7 @@ app.post("/api/undo", currentUser, async (request, response, next) => {
   try {
     await client.query("BEGIN");
     const params = [];
-    const filters = ["undone_at IS NULL", "action_type <> 'restore'"];
+    const filters = ["undone_at IS NULL", "action_type <> 'restore'", "entity_type <> 'purchase'"];
     if (request.user.role !== "admin") {
       params.push(request.user.id);
       filters.push(`user_id = $${params.length}`);
@@ -1815,8 +2160,15 @@ app.post("/api/undo", currentUser, async (request, response, next) => {
 
 app.get("/api/dashboard", currentUser, async (_request, response, next) => {
   try {
-    const [todayRevenue, monthRevenue, totalSalesQuantity, lowStockCount, totalProductCount, totalStock, hotProducts, inventoryOverview] = await Promise.all([
-      query("SELECT COALESCE(SUM(total), 0)::float AS value FROM sales WHERE sold_at = CURRENT_DATE AND voided_at IS NULL"),
+    const [todaySummary, monthRevenue, totalSalesQuantity, lowStockCount, totalProductCount, totalStock, hotProducts, inventoryOverview] = await Promise.all([
+      query(`
+        SELECT
+          COALESCE(SUM(sales.total), 0)::float AS revenue,
+          COALESCE(SUM(COALESCE(NULLIF(products.average_cost, 0), products.cost) * sales.quantity), 0)::float AS cost
+        FROM sales
+        JOIN products ON products.id = sales.product_id
+        WHERE sales.sold_at = CURRENT_DATE AND sales.voided_at IS NULL
+      `),
       query("SELECT COALESCE(SUM(total), 0)::float AS value FROM sales WHERE date_trunc('month', sold_at) = date_trunc('month', CURRENT_DATE) AND voided_at IS NULL"),
       query("SELECT COALESCE(SUM(quantity), 0)::int AS value FROM sales WHERE voided_at IS NULL"),
       query("SELECT COUNT(*)::int AS value FROM products WHERE deleted_at IS NULL AND stock <= low_stock_threshold"),
@@ -1841,7 +2193,10 @@ app.get("/api/dashboard", currentUser, async (_request, response, next) => {
     ]);
 
     response.json({
-      todayRevenue: todayRevenue.rows[0].value,
+      todayRevenue: todaySummary.rows[0].revenue,
+      todayCost: todaySummary.rows[0].cost,
+      todayProfit: todaySummary.rows[0].revenue - todaySummary.rows[0].cost,
+      todayMarginRate: grossMargin(todaySummary.rows[0].revenue, todaySummary.rows[0].cost),
       monthRevenue: monthRevenue.rows[0].value,
       totalSalesQuantity: totalSalesQuantity.rows[0].value,
       lowStockCount: lowStockCount.rows[0].value,
