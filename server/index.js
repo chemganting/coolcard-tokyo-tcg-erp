@@ -590,6 +590,137 @@ function startScheduledBackups() {
   });
 }
 
+async function writeAuditLog(client, request, actionType, entityType, beforeData, afterData) {
+  await client.query(
+    `
+      INSERT INTO audit_logs (user_id, username, action_type, entity_type, before_data, after_data)
+      VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb)
+    `,
+    [
+      request.user?.id ?? null,
+      request.user?.username ?? "system",
+      actionType,
+      entityType,
+      JSON.stringify(beforeData ?? null),
+      JSON.stringify(afterData ?? null)
+    ]
+  );
+}
+
+async function productById(client, id) {
+  const { rows } = await client.query(
+    `
+      SELECT id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost::text, price::text, stock, low_stock_threshold, notes, created_at, updated_at
+      FROM products
+      WHERE id = $1
+    `,
+    [id]
+  );
+  return rows[0] ?? null;
+}
+
+async function saleById(client, id) {
+  const { rows } = await client.query(
+    `
+      SELECT id, product_id, user_id, quantity, sale_unit, cards_per_unit, unit_price::text, total::text, sold_at, created_at
+      FROM sales
+      WHERE id = $1
+    `,
+    [id]
+  );
+  return rows[0] ?? null;
+}
+
+async function userById(client, id) {
+  const { rows } = await client.query(
+    "SELECT id, username, password_hash, name, display_name, role, is_active, created_at, updated_at FROM users WHERE id = $1",
+    [id]
+  );
+  return rows[0] ?? null;
+}
+
+async function restoreProductSnapshot(client, product) {
+  await client.query(
+    `
+      INSERT INTO products
+        (id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost, price, stock, low_stock_threshold, notes, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::numeric, $10::numeric, $11, $12, $13, COALESCE($14::timestamptz, NOW()), COALESCE($15::timestamptz, NOW()))
+      ON CONFLICT (id) DO UPDATE SET
+        name = EXCLUDED.name,
+        series = EXCLUDED.series,
+        rarity = EXCLUDED.rarity,
+        condition = EXCLUDED.condition,
+        unit = EXCLUDED.unit,
+        cards_per_unit = EXCLUDED.cards_per_unit,
+        package_spec = EXCLUDED.package_spec,
+        cost = EXCLUDED.cost,
+        price = EXCLUDED.price,
+        stock = EXCLUDED.stock,
+        low_stock_threshold = EXCLUDED.low_stock_threshold,
+        notes = EXCLUDED.notes,
+        updated_at = NOW()
+    `,
+    [
+      product.id,
+      product.name,
+      product.series,
+      product.rarity,
+      product.condition,
+      product.unit ?? "單張",
+      product.cards_per_unit ?? 1,
+      product.package_spec ?? "單張卡",
+      product.cost,
+      product.price,
+      product.stock ?? 0,
+      product.low_stock_threshold ?? 3,
+      product.notes ?? "",
+      product.created_at,
+      product.updated_at
+    ]
+  );
+}
+
+async function restoreUserSnapshot(client, user) {
+  await client.query(
+    `
+      INSERT INTO users (id, username, password_hash, name, display_name, role, is_active, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8::timestamptz, NOW()), COALESCE($9::timestamptz, NOW()))
+      ON CONFLICT (id) DO UPDATE SET
+        username = EXCLUDED.username,
+        password_hash = EXCLUDED.password_hash,
+        name = EXCLUDED.name,
+        display_name = EXCLUDED.display_name,
+        role = EXCLUDED.role,
+        is_active = EXCLUDED.is_active,
+        updated_at = NOW()
+    `,
+    [user.id, user.username, user.password_hash, user.name, user.display_name ?? user.name, user.role, user.is_active !== false, user.created_at, user.updated_at]
+  );
+}
+
+async function restoreSaleSnapshot(client, sale) {
+  await client.query(
+    `
+      INSERT INTO sales (id, product_id, user_id, quantity, sale_unit, cards_per_unit, unit_price, total, sold_at, created_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7::numeric, $8::numeric, $9::date, COALESCE($10::timestamptz, NOW()))
+      ON CONFLICT (id) DO UPDATE SET
+        product_id = EXCLUDED.product_id,
+        user_id = EXCLUDED.user_id,
+        quantity = EXCLUDED.quantity,
+        sale_unit = EXCLUDED.sale_unit,
+        cards_per_unit = EXCLUDED.cards_per_unit,
+        unit_price = EXCLUDED.unit_price,
+        total = EXCLUDED.total,
+        sold_at = EXCLUDED.sold_at
+    `,
+    [sale.id, sale.product_id, sale.user_id, sale.quantity, sale.sale_unit ?? "單張", sale.cards_per_unit ?? 1, sale.unit_price, sale.total, sale.sold_at, sale.created_at]
+  );
+}
+
+async function syncSequence(client, tableName) {
+  await client.query(`SELECT setval(pg_get_serial_sequence('${tableName}', 'id'), COALESCE((SELECT MAX(id) FROM ${tableName}), 1), TRUE)`);
+}
+
 app.get("/api/health", (_request, response) => {
   response.json({ ok: true, database: "postgres" });
 });
@@ -671,19 +802,26 @@ app.post("/api/users", currentUser, requireAdmin, async (request, response, next
     return response.status(400).json({ message: "員工資料不完整，密碼至少 6 碼" });
   }
 
+  const client = await pool.connect();
   try {
-    const { rows } = await query(
+    await client.query("BEGIN");
+    const { rows } = await client.query(
       `
         INSERT INTO users (username, password_hash, name, display_name, role, is_active)
         VALUES ($1, $2, $3, $4, $5, $6)
-        RETURNING id
+        RETURNING id, username, password_hash, name, display_name, role, is_active, created_at, updated_at
       `,
       [user.username, bcrypt.hashSync(password, 12), user.name, user.displayName, user.role, user.isActive]
     );
+    await writeAuditLog(client, request, "create", "user", null, rows[0]);
+    await client.query("COMMIT");
     response.status(201).json({ id: rows[0].id });
   } catch (error) {
+    await client.query("ROLLBACK");
     if (error.code === "23505") return response.status(409).json({ message: "帳號已存在" });
     next(error);
+  } finally {
+    client.release();
   }
 });
 
@@ -692,23 +830,37 @@ app.put("/api/users/:id", currentUser, requireAdmin, async (request, response, n
   const user = userPayload(request.body);
   if (!validateUserPayload(user)) return response.status(400).json({ message: "員工資料不完整" });
 
+  const client = await pool.connect();
   try {
+    await client.query("BEGIN");
     if (user.role !== "admin" && await isLastActiveAdmin(userId)) {
+      await client.query("ROLLBACK");
       return response.status(409).json({ message: "不允許移除最後一個 admin" });
     }
 
-    const result = await query(
+    const before = await userById(client, userId);
+    if (!before) {
+      await client.query("ROLLBACK");
+      return response.status(404).json({ message: "員工不存在" });
+    }
+
+    const result = await client.query(
       `
         UPDATE users
         SET name = $1, display_name = $2, role = $3, updated_at = NOW()
         WHERE id = $4
+        RETURNING id, username, password_hash, name, display_name, role, is_active, created_at, updated_at
       `,
       [user.name, user.displayName, user.role, userId]
     );
-    if (result.rowCount === 0) return response.status(404).json({ message: "員工不存在" });
+    await writeAuditLog(client, request, "update", "user", before, result.rows[0]);
+    await client.query("COMMIT");
     response.json({ ok: true });
   } catch (error) {
+    await client.query("ROLLBACK");
     next(error);
+  } finally {
+    client.release();
   }
 });
 
@@ -716,15 +868,26 @@ app.patch("/api/users/:id/password", currentUser, requireAdmin, async (request, 
   const password = String(request.body.password ?? "");
   if (password.length < 6) return response.status(400).json({ message: "密碼至少 6 碼" });
 
+  const client = await pool.connect();
   try {
-    const result = await query(
-      "UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2",
+    await client.query("BEGIN");
+    const before = await userById(client, Number(request.params.id));
+    const result = await client.query(
+      "UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2 RETURNING id, username, password_hash, name, display_name, role, is_active, created_at, updated_at",
       [bcrypt.hashSync(password, 12), Number(request.params.id)]
     );
-    if (result.rowCount === 0) return response.status(404).json({ message: "員工不存在" });
+    if (result.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return response.status(404).json({ message: "員工不存在" });
+    }
+    await writeAuditLog(client, request, "update", "user", before, result.rows[0]);
+    await client.query("COMMIT");
     response.json({ ok: true });
   } catch (error) {
+    await client.query("ROLLBACK");
     next(error);
+  } finally {
+    client.release();
   }
 });
 
@@ -732,19 +895,31 @@ app.patch("/api/users/:id/status", currentUser, requireAdmin, async (request, re
   const userId = Number(request.params.id);
   const isActive = request.body.isActive === true;
 
+  const client = await pool.connect();
   try {
+    await client.query("BEGIN");
     if (!isActive && await isLastActiveAdmin(userId)) {
+      await client.query("ROLLBACK");
       return response.status(409).json({ message: "不允許停用最後一個 admin" });
     }
 
-    const result = await query(
-      "UPDATE users SET is_active = $1, updated_at = NOW() WHERE id = $2",
+    const before = await userById(client, userId);
+    const result = await client.query(
+      "UPDATE users SET is_active = $1, updated_at = NOW() WHERE id = $2 RETURNING id, username, password_hash, name, display_name, role, is_active, created_at, updated_at",
       [isActive, userId]
     );
-    if (result.rowCount === 0) return response.status(404).json({ message: "員工不存在" });
+    if (result.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return response.status(404).json({ message: "員工不存在" });
+    }
+    await writeAuditLog(client, request, "update", "user", before, result.rows[0]);
+    await client.query("COMMIT");
     response.json({ ok: true });
   } catch (error) {
+    await client.query("ROLLBACK");
     next(error);
+  } finally {
+    client.release();
   }
 });
 
@@ -752,17 +927,29 @@ app.delete("/api/users/:id", currentUser, requireAdmin, async (request, response
   const userId = Number(request.params.id);
   if (userId === request.user.id) return response.status(409).json({ message: "不允許刪除目前登入中的自己" });
 
+  const client = await pool.connect();
   try {
+    await client.query("BEGIN");
     if (await isLastActiveAdmin(userId)) {
+      await client.query("ROLLBACK");
       return response.status(409).json({ message: "不允許刪除最後一個 admin" });
     }
 
-    const result = await query("DELETE FROM users WHERE id = $1", [userId]);
-    if (result.rowCount === 0) return response.status(404).json({ message: "員工不存在" });
+    const before = await userById(client, userId);
+    const result = await client.query("DELETE FROM users WHERE id = $1", [userId]);
+    if (result.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return response.status(404).json({ message: "員工不存在" });
+    }
+    await writeAuditLog(client, request, "delete", "user", before, null);
+    await client.query("COMMIT");
     response.json({ ok: true });
   } catch (error) {
+    await client.query("ROLLBACK");
     if (error.code === "23503") return response.status(409).json({ message: "此員工已有銷售紀錄，無法刪除，可改為停用" });
     next(error);
+  } finally {
+    client.release();
   }
 });
 
@@ -790,13 +977,15 @@ app.post("/api/products", currentUser, requireAdmin, async (request, response, n
   const product = productPayload(request.body);
   if (!validateProduct(product)) return response.status(400).json({ message: "商品資料不完整或格式錯誤" });
 
+  const client = await pool.connect();
   try {
-    const { rows } = await query(
+    await client.query("BEGIN");
+    const { rows } = await client.query(
       `
         INSERT INTO products
           (name, series, rarity, condition, unit, cards_per_unit, package_spec, cost, price, stock, low_stock_threshold, notes)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-        RETURNING id
+        RETURNING id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost::text, price::text, stock, low_stock_threshold, notes, created_at, updated_at
       `,
       [
         product.name,
@@ -813,9 +1002,14 @@ app.post("/api/products", currentUser, requireAdmin, async (request, response, n
         product.notes
       ]
     );
+    await writeAuditLog(client, request, "create", "product", null, rows[0]);
+    await client.query("COMMIT");
     response.status(201).json({ id: rows[0].id });
   } catch (error) {
+    await client.query("ROLLBACK");
     next(error);
+  } finally {
+    client.release();
   }
 });
 
@@ -823,8 +1017,17 @@ app.put("/api/products/:id", currentUser, requireAdmin, async (request, response
   const product = productPayload(request.body);
   if (!validateProduct(product)) return response.status(400).json({ message: "商品資料不完整或格式錯誤" });
 
+  const client = await pool.connect();
   try {
-    const result = await query(
+    await client.query("BEGIN");
+    const before = await productById(client, Number(request.params.id));
+    if (!before) {
+      await client.query("ROLLBACK");
+      return response.status(404).json({ message: "商品不存在" });
+    }
+
+    const entityType = before.stock !== product.stock ? "inventory" : "product";
+    const result = await client.query(
       `
         UPDATE products
         SET name = $1,
@@ -841,6 +1044,7 @@ app.put("/api/products/:id", currentUser, requireAdmin, async (request, response
             notes = $12,
             updated_at = NOW()
         WHERE id = $13
+        RETURNING id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost::text, price::text, stock, low_stock_threshold, notes, created_at, updated_at
       `,
       [
         product.name,
@@ -858,25 +1062,41 @@ app.put("/api/products/:id", currentUser, requireAdmin, async (request, response
         Number(request.params.id)
       ]
     );
-    if (result.rowCount === 0) return response.status(404).json({ message: "商品不存在" });
+    await writeAuditLog(client, request, "update", entityType, before, result.rows[0]);
+    await client.query("COMMIT");
     response.json({ ok: true });
   } catch (error) {
+    await client.query("ROLLBACK");
     next(error);
+  } finally {
+    client.release();
   }
 });
 
 app.delete("/api/products/:id", currentUser, requireAdmin, async (request, response, next) => {
+  const client = await pool.connect();
   try {
-    const saleCount = await query("SELECT COUNT(*)::int AS count FROM sales WHERE product_id = $1", [request.params.id]);
+    await client.query("BEGIN");
+    const saleCount = await client.query("SELECT COUNT(*)::int AS count FROM sales WHERE product_id = $1", [request.params.id]);
     if (saleCount.rows[0].count > 0) {
+      await client.query("ROLLBACK");
       return response.status(409).json({ message: "已有銷售紀錄的商品不可刪除" });
     }
 
-    const result = await query("DELETE FROM products WHERE id = $1", [request.params.id]);
-    if (result.rowCount === 0) return response.status(404).json({ message: "商品不存在" });
+    const before = await productById(client, Number(request.params.id));
+    const result = await client.query("DELETE FROM products WHERE id = $1", [request.params.id]);
+    if (result.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return response.status(404).json({ message: "商品不存在" });
+    }
+    await writeAuditLog(client, request, "delete", "product", before, null);
+    await client.query("COMMIT");
     response.json({ ok: true });
   } catch (error) {
+    await client.query("ROLLBACK");
     next(error);
+  } finally {
+    client.release();
   }
 });
 
@@ -963,11 +1183,12 @@ app.post("/api/products/import", currentUser, requireAdmin, async (request, resp
 
       if (!validateProduct(product)) continue;
 
-      await client.query(
+      const inserted = await client.query(
         `
           INSERT INTO products
             (name, series, rarity, condition, unit, cards_per_unit, package_spec, cost, price, stock, low_stock_threshold, notes)
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+          RETURNING id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost::text, price::text, stock, low_stock_threshold, notes, created_at, updated_at
         `,
         [
           product.name,
@@ -984,6 +1205,7 @@ app.post("/api/products/import", currentUser, requireAdmin, async (request, resp
           product.notes
         ]
       );
+      await writeAuditLog(client, request, "create", "product", null, inserted.rows[0]);
       imported += 1;
     }
 
@@ -1058,7 +1280,7 @@ app.post("/api/sales", currentUser, async (request, response, next) => {
   try {
     await client.query("BEGIN");
     const productResult = await client.query(
-      "SELECT id, name, stock, unit, cards_per_unit FROM products WHERE id = $1 FOR UPDATE",
+      "SELECT id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost::text, price::text, stock, low_stock_threshold, notes, created_at, updated_at FROM products WHERE id = $1 FOR UPDATE",
       [productId]
     );
     const product = productResult.rows[0];
@@ -1077,12 +1299,14 @@ app.post("/api/sales", currentUser, async (request, response, next) => {
       `
         INSERT INTO sales (product_id, user_id, quantity, sale_unit, cards_per_unit, unit_price, total, sold_at)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        RETURNING id
+        RETURNING id, product_id, user_id, quantity, sale_unit, cards_per_unit, unit_price::text, total::text, sold_at, created_at
       `,
       [productId, request.user.id, quantity, saleUnit, saleCardsPerUnit, unitPrice, total, soldAt]
     );
 
     await client.query("UPDATE products SET stock = stock - $1, updated_at = NOW() WHERE id = $2", [quantity, productId]);
+    const afterProduct = await productById(client, productId);
+    await writeAuditLog(client, request, "create", "sale", { product }, { sale: sale.rows[0], product: afterProduct });
     await client.query("COMMIT");
     response.status(201).json({ id: sale.rows[0].id });
   } catch (error) {
@@ -1097,19 +1321,129 @@ app.delete("/api/sales/:id", currentUser, requireAdmin, async (request, response
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const saleResult = await client.query("SELECT product_id, quantity FROM sales WHERE id = $1", [request.params.id]);
+    const saleResult = await client.query(
+      "SELECT id, product_id, user_id, quantity, sale_unit, cards_per_unit, unit_price::text, total::text, sold_at, created_at FROM sales WHERE id = $1",
+      [request.params.id]
+    );
     const sale = saleResult.rows[0];
     if (!sale) {
       await client.query("ROLLBACK");
       return response.status(404).json({ message: "銷售紀錄不存在" });
     }
+    const beforeProduct = await productById(client, sale.product_id);
 
     await client.query("DELETE FROM sales WHERE id = $1", [request.params.id]);
     await client.query("UPDATE products SET stock = stock + $1, updated_at = NOW() WHERE id = $2", [sale.quantity, sale.product_id]);
+    const afterProduct = await productById(client, sale.product_id);
+    await writeAuditLog(client, request, "delete", "sale", { sale, product: beforeProduct }, { product: afterProduct });
     await client.query("COMMIT");
     response.json({ ok: true });
   } catch (error) {
     await client.query("ROLLBACK");
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+app.get("/api/audit-logs", currentUser, async (request, response, next) => {
+  try {
+    const params = [];
+    const visibility = request.user.role === "admin" ? "" : "WHERE user_id = $1";
+    if (request.user.role !== "admin") params.push(request.user.id);
+    const { rows } = await query(
+      `
+        SELECT id, user_id, username, action_type, entity_type, before_data, after_data, undone_at, created_at
+        FROM audit_logs
+        ${visibility}
+        ORDER BY created_at DESC, id DESC
+        LIMIT 100
+      `,
+      params
+    );
+    response.json(rowsToCamel(rows));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/undo", currentUser, async (request, response, next) => {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const params = [];
+    const filters = ["undone_at IS NULL", "action_type <> 'restore'"];
+    if (request.user.role !== "admin") {
+      params.push(request.user.id);
+      filters.push(`user_id = $${params.length}`);
+    }
+    if (request.body.auditLogId) {
+      params.push(Number(request.body.auditLogId));
+      filters.push(`id = $${params.length}`);
+    }
+
+    const { rows } = await client.query(
+      `
+        SELECT id, user_id, username, action_type, entity_type, before_data, after_data
+        FROM audit_logs
+        WHERE ${filters.join(" AND ")}
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+        FOR UPDATE
+      `,
+      params
+    );
+    const log = rows[0];
+    if (!log) {
+      await client.query("ROLLBACK");
+      return response.status(404).json({ message: "沒有可還原的操作" });
+    }
+
+    const before = log.before_data;
+    const after = log.after_data;
+
+    if (log.entity_type === "product" || log.entity_type === "inventory") {
+      if (log.action_type === "create") {
+        await client.query("DELETE FROM products WHERE id = $1", [after.id]);
+      } else if (log.action_type === "update") {
+        await restoreProductSnapshot(client, before);
+      } else if (log.action_type === "delete") {
+        await restoreProductSnapshot(client, before);
+        await syncSequence(client, "products");
+      }
+    } else if (log.entity_type === "sale") {
+      if (log.action_type === "create") {
+        await client.query("DELETE FROM sales WHERE id = $1", [after.sale.id]);
+        if (before.product) await restoreProductSnapshot(client, before.product);
+      } else if (log.action_type === "delete") {
+        if (before.product) await restoreProductSnapshot(client, before.product);
+        await restoreSaleSnapshot(client, before.sale);
+        await syncSequence(client, "sales");
+      } else if (log.action_type === "update") {
+        await restoreSaleSnapshot(client, before.sale ?? before);
+      }
+    } else if (log.entity_type === "user") {
+      if (log.action_type === "create") {
+        if (after.id === request.user.id) {
+          await client.query("ROLLBACK");
+          return response.status(409).json({ message: "不可還原刪除目前登入中的自己" });
+        }
+        await client.query("DELETE FROM users WHERE id = $1", [after.id]);
+      } else if (log.action_type === "update") {
+        await restoreUserSnapshot(client, before);
+      } else if (log.action_type === "delete") {
+        await restoreUserSnapshot(client, before);
+        await syncSequence(client, "users");
+      }
+    }
+
+    await client.query("UPDATE audit_logs SET undone_at = NOW() WHERE id = $1", [log.id]);
+    await writeAuditLog(client, request, "restore", log.entity_type, after, before);
+    await client.query("COMMIT");
+    response.json({ ok: true, restoredAuditLogId: log.id });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    if (error.code === "23503") return response.status(409).json({ message: "資料已有關聯紀錄，無法自動還原" });
     next(error);
   } finally {
     client.release();

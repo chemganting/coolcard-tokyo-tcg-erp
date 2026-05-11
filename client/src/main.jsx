@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   BarChart3,
@@ -8,6 +8,7 @@ import {
   Edit3,
   LogOut,
   ExternalLink,
+  History,
   PackagePlus,
   Search,
   ShieldCheck,
@@ -15,6 +16,7 @@ import {
   Trash2,
   TrendingUp,
   RotateCcw,
+  Undo2,
   UserRound,
   Warehouse
 } from "lucide-react";
@@ -49,6 +51,20 @@ function formatBytes(bytes) {
   const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
   return `${(bytes / 1024 ** index).toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
 }
+
+const actionLabels = {
+  create: "新增",
+  update: "更新",
+  delete: "刪除",
+  restore: "還原"
+};
+
+const entityLabels = {
+  product: "商品",
+  sale: "銷售紀錄",
+  user: "員工",
+  inventory: "庫存"
+};
 
 async function api(path, options = {}) {
   const auth = authFromStorage();
@@ -213,9 +229,12 @@ function App() {
   const [sales, setSales] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [backups, setBackups] = useState([]);
+  const [auditLogs, setAuditLogs] = useState([]);
   const [dashboard, setDashboard] = useState(null);
   const [profitReport, setProfitReport] = useState(null);
   const [syncingSheet, setSyncingSheet] = useState(false);
+  const [autoSaveStatus, setAutoSaveStatus] = useState("");
+  const [undoing, setUndoing] = useState(false);
   const [query, setQuery] = useState("");
   const [error, setError] = useState("");
   const [productForm, setProductForm] = useState(emptyProduct);
@@ -227,6 +246,8 @@ function App() {
   const [editingId, setEditingId] = useState(null);
   const [saleForm, setSaleForm] = useState({ productId: "", quantity: 1, saleUnit: "單張", cardsPerUnit: "1", unitPrice: "", soldAt: new Date().toISOString().slice(0, 10) });
   const [dateRange, setDateRange] = useState({ from: new Date().toISOString().slice(0, 10), to: new Date().toISOString().slice(0, 10) });
+  const productAutosaveReady = useRef(false);
+  const employeeAutosaveReady = useRef(false);
 
   const isAdmin = auth?.user?.role === "admin";
 
@@ -248,13 +269,14 @@ function App() {
   const load = async () => {
     if (!auth?.token) return;
     const saleQuery = `?from=${dateRange.from}&to=${dateRange.to}`;
-    const [productRows, saleRows, dashboardRow, profitRow, employeeRows, backupRows] = await Promise.all([
+    const [productRows, saleRows, dashboardRow, profitRow, employeeRows, backupRows, auditRows] = await Promise.all([
       api(`/products?q=${encodeURIComponent(query)}`),
       api(`/sales${saleQuery}`),
       api("/dashboard"),
       api("/profit-report"),
       isAdmin ? api("/users") : Promise.resolve([]),
-      isAdmin ? api("/backups").catch(() => []) : Promise.resolve([])
+      isAdmin ? api("/backups").catch(() => []) : Promise.resolve([]),
+      api("/audit-logs").catch(() => [])
     ]);
     setProducts(productRows);
     setSales(saleRows);
@@ -262,6 +284,7 @@ function App() {
     setProfitReport(profitRow);
     setEmployees(employeeRows);
     setBackups(backupRows);
+    setAuditLogs(auditRows);
   };
 
   useEffect(() => {
@@ -285,6 +308,73 @@ function App() {
     [products, saleForm.productId]
   );
 
+  useEffect(() => {
+    if (!editingId) return undefined;
+    if (!productAutosaveReady.current) {
+      productAutosaveReady.current = true;
+      return undefined;
+    }
+
+    const timer = window.setTimeout(async () => {
+      setAutoSaveStatus("儲存中...");
+      setError("");
+      try {
+        await api(`/products/${editingId}`, {
+          method: "PUT",
+          body: JSON.stringify({
+            ...productForm,
+            cardsPerUnit: Number(productForm.cardsPerUnit),
+            cost: Number(productForm.cost),
+            price: Number(productForm.price),
+            stock: Number(productForm.stock),
+            lowStockThreshold: Number(productForm.lowStockThreshold)
+          })
+        });
+        setAutoSaveStatus("已自動儲存");
+        await load();
+      } catch (err) {
+        setAutoSaveStatus("自動儲存失敗");
+        setError(err.message);
+      }
+    }, 800);
+
+    return () => window.clearTimeout(timer);
+  }, [productForm, editingId]);
+
+  useEffect(() => {
+    if (!editingEmployeeId || !employeeDraft) return undefined;
+    if (!employeeAutosaveReady.current) {
+      employeeAutosaveReady.current = true;
+      return undefined;
+    }
+
+    const timer = window.setTimeout(async () => {
+      const employee = employees.find((item) => item.id === editingEmployeeId);
+      if (!employee) return;
+      setAutoSaveStatus("儲存中...");
+      setError("");
+      try {
+        await api(`/users/${employee.id}`, {
+          method: "PUT",
+          body: JSON.stringify({
+            username: employee.username,
+            name: employeeDraft.name,
+            displayName: employeeDraft.displayName || employeeDraft.name,
+            role: employeeDraft.role,
+            isActive: employee.isActive
+          })
+        });
+        setAutoSaveStatus("已自動儲存");
+        await load();
+      } catch (err) {
+        setAutoSaveStatus("自動儲存失敗");
+        setError(err.message);
+      }
+    }, 800);
+
+    return () => window.clearTimeout(timer);
+  }, [employeeDraft, editingEmployeeId]);
+
   const submitProduct = async (event) => {
     event.preventDefault();
     setError("");
@@ -303,6 +393,8 @@ function App() {
       });
       setProductForm(emptyProduct);
       setEditingId(null);
+      productAutosaveReady.current = false;
+      setAutoSaveStatus("已自動儲存");
       await load();
     } catch (err) {
       setError(err.message);
@@ -311,6 +403,7 @@ function App() {
 
   const editProduct = (product) => {
     setEditingId(product.id);
+    productAutosaveReady.current = false;
     setProductForm({
       name: product.name,
       series: product.series,
@@ -331,6 +424,7 @@ function App() {
     if (!window.confirm(`確定刪除「${product.name}」？`)) return;
     try {
       await api(`/products/${product.id}`, { method: "DELETE" });
+      setAutoSaveStatus("已自動儲存");
       await load();
     } catch (err) {
       setError(err.message);
@@ -353,6 +447,7 @@ function App() {
         })
       });
       setSaleForm((current) => ({ ...current, quantity: 1 }));
+      setAutoSaveStatus("已自動儲存");
       await load();
     } catch (err) {
       setError(err.message);
@@ -379,6 +474,7 @@ function App() {
     if (!window.confirm(`確定刪除銷售紀錄 #${sale.id}？庫存會自動回補。`)) return;
     try {
       await api(`/sales/${sale.id}`, { method: "DELETE" });
+      setAutoSaveStatus("已自動儲存");
       await load();
     } catch (err) {
       setError(err.message);
@@ -398,6 +494,7 @@ function App() {
       };
       await api("/users", { method: "POST", body: JSON.stringify({ ...payload, password: employeeForm.password }) });
       setEmployeeForm(emptyEmployee);
+      setAutoSaveStatus("已自動儲存");
       await load();
       window.alert("員工帳號已建立");
     } catch (err) {
@@ -407,6 +504,7 @@ function App() {
 
   const editEmployee = (employee) => {
     setEditingEmployeeId(employee.id);
+    employeeAutosaveReady.current = false;
     setEmployeeDraft({
       username: employee.username,
       name: employee.name,
@@ -419,6 +517,7 @@ function App() {
   const cancelEmployeeEdit = () => {
     setEditingEmployeeId(null);
     setEmployeeDraft(null);
+    employeeAutosaveReady.current = false;
   };
 
   const saveEmployeeEdit = async (employee) => {
@@ -436,6 +535,7 @@ function App() {
         })
       });
       cancelEmployeeEdit();
+      setAutoSaveStatus("已自動儲存");
       await load();
       window.alert("員工資料已更新");
     } catch (err) {
@@ -450,6 +550,7 @@ function App() {
     try {
       await api(`/users/${employee.id}/password`, { method: "PATCH", body: JSON.stringify({ password }) });
       setPasswordByUser((current) => ({ ...current, [employee.id]: "" }));
+      setAutoSaveStatus("已自動儲存");
       window.alert("密碼已更新");
     } catch (err) {
       setError(err.message);
@@ -463,6 +564,7 @@ function App() {
         method: "PATCH",
         body: JSON.stringify({ isActive: !employee.isActive })
       });
+      setAutoSaveStatus("已自動儲存");
       await load();
     } catch (err) {
       setError(err.message);
@@ -474,6 +576,7 @@ function App() {
     setError("");
     try {
       await api(`/users/${employee.id}`, { method: "DELETE" });
+      setAutoSaveStatus("已自動儲存");
       await load();
     } catch (err) {
       setError(err.message);
@@ -533,6 +636,22 @@ function App() {
     }
   };
 
+  const undoLastAction = async () => {
+    if (undoing) return;
+    if (!window.confirm("確定還原上一步操作？還原後會同步更新後端資料庫。")) return;
+    setUndoing(true);
+    setError("");
+    try {
+      await api("/undo", { method: "POST", body: JSON.stringify({}) });
+      setAutoSaveStatus("已還原上一步");
+      await load();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setUndoing(false);
+    }
+  };
+
   const logout = () => {
     localStorage.removeItem("pokemon-erp-auth");
     setAuth(null);
@@ -558,6 +677,7 @@ function App() {
             [TrendingUp, "利潤分析"],
             [Boxes, "商品庫存"],
             [ShoppingCart, "銷售管理"],
+            [History, "操作紀錄"],
             ...(isAdmin ? [[UserRound, "員工管理"], [Database, "系統備份"]] : [])
           ].map(([Icon, label]) => (
             <a key={label} href={`#${label}`} className="flex items-center gap-3 rounded-md px-3 py-2 hover:bg-slate-100">
@@ -576,6 +696,13 @@ function App() {
               <h1 className="text-2xl font-semibold text-slate-950">{APP_NAME}</h1>
             </div>
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+              <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600">
+                {autoSaveStatus || "已自動儲存"}
+              </div>
+              <Button type="button" variant="secondary" disabled={undoing} onClick={undoLastAction}>
+                <Undo2 className="h-4 w-4" />
+                {undoing ? "還原中..." : "還原上一步"}
+              </Button>
               <div className="flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
                 <UserRound className="h-4 w-4 text-slate-500" />
                 <span>{auth.user.name}</span>
@@ -921,6 +1048,52 @@ function App() {
                   </tbody>
                 </table>
               </div>
+            </div>
+          </section>
+
+          <section id="操作紀錄" className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="mb-4 flex items-center gap-2">
+              <History className="h-5 w-5 text-slate-700" />
+              <h2 className="text-lg font-semibold">操作紀錄</h2>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[920px] text-left text-sm">
+                <thead className="border-b border-slate-200 text-xs text-slate-500">
+                  <tr>
+                    <th className="py-3 pr-4">時間</th>
+                    <th className="py-3 pr-4">操作者</th>
+                    <th className="py-3 pr-4">操作</th>
+                    <th className="py-3 pr-4">資料類型</th>
+                    <th className="py-3 pr-4">狀態</th>
+                    <th className="py-3">摘要</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {auditLogs.map((log) => {
+                    const beforeName = log.beforeData?.name || log.beforeData?.sale?.id || log.beforeData?.username || log.beforeData?.product?.name;
+                    const afterName = log.afterData?.name || log.afterData?.sale?.id || log.afterData?.username || log.afterData?.product?.name;
+                    return (
+                      <tr key={log.id}>
+                        <td className="py-3 pr-4">{new Date(log.createdAt).toLocaleString("zh-TW")}</td>
+                        <td className="py-3 pr-4">{log.username}</td>
+                        <td className="py-3 pr-4">{actionLabels[log.actionType] ?? log.actionType}</td>
+                        <td className="py-3 pr-4">{entityLabels[log.entityType] ?? log.entityType}</td>
+                        <td className="py-3 pr-4">
+                          <span className={`rounded px-2 py-1 text-xs font-medium ${log.undoneAt ? "bg-slate-100 text-slate-600" : "bg-emerald-50 text-emerald-700"}`}>
+                            {log.undoneAt ? "已還原" : "可還原"}
+                          </span>
+                        </td>
+                        <td className="py-3 text-slate-600">{beforeName || afterName || `#${log.id}`}</td>
+                      </tr>
+                    );
+                  })}
+                  {auditLogs.length === 0 && (
+                    <tr>
+                      <td className="py-6 text-center text-slate-500" colSpan="6">尚無操作紀錄</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
             </div>
           </section>
 

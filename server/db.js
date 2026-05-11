@@ -144,6 +144,18 @@ export async function initDb() {
         sold_at DATE NOT NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+
+      CREATE TABLE IF NOT EXISTS audit_logs (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        username TEXT NOT NULL,
+        action_type TEXT NOT NULL CHECK (action_type IN ('create', 'update', 'delete', 'restore')),
+        entity_type TEXT NOT NULL CHECK (entity_type IN ('product', 'sale', 'user', 'inventory')),
+        before_data JSONB,
+        after_data JSONB,
+        undone_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
     `);
 
     await client.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT");
@@ -155,6 +167,7 @@ export async function initDb() {
     await client.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS package_spec TEXT NOT NULL DEFAULT '單張卡'");
     await client.query("ALTER TABLE sales ADD COLUMN IF NOT EXISTS sale_unit TEXT NOT NULL DEFAULT '單張'");
     await client.query("ALTER TABLE sales ADD COLUMN IF NOT EXISTS cards_per_unit INTEGER NOT NULL DEFAULT 1");
+    await client.query("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS undone_at TIMESTAMPTZ");
 
     await client.query("UPDATE products SET unit = '單張' WHERE unit IS NULL OR unit = ''");
     await client.query("UPDATE products SET cards_per_unit = 1 WHERE cards_per_unit IS NULL OR cards_per_unit <= 0");
