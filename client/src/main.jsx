@@ -981,13 +981,50 @@ function App() {
             </div>
           </section>
 
-          <section id="商品庫存" className="grid gap-6 xl:grid-cols-[1.25fr_0.75fr]">
+          <section id="商品庫存">
             <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="mb-4 flex items-center gap-2">
+                <Boxes className="h-5 w-5 text-slate-700" />
+                <h2 className="text-lg font-semibold">商品庫存管理</h2>
+              </div>
+
+              <form onSubmit={submitProduct} className="mb-6 rounded-lg border border-slate-200 bg-slate-50 p-4">
                 <div className="flex items-center gap-2">
-                  <Boxes className="h-5 w-5 text-slate-700" />
-                  <h2 className="text-lg font-semibold">商品庫存管理</h2>
+                  <PackagePlus className="h-5 w-5 text-slate-700" />
+                  <h3 className="text-base font-semibold">{editingId ? "編輯商品" : "新增商品"}</h3>
                 </div>
+                {!isAdmin && <p className="mt-3 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-700">店員可查看庫存與新增銷售，但不能新增、編輯或刪除商品。</p>}
+                <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  <TextInput disabled={!isAdmin} required placeholder="商品名稱" value={productForm.name} onChange={(e) => setProductForm({ ...productForm, name: e.target.value })} />
+                  <TextInput disabled={!isAdmin} required placeholder="卡牌系列" value={productForm.series} onChange={(e) => setProductForm({ ...productForm, series: e.target.value })} />
+                  <SelectInput disabled={!isAdmin} value={productForm.rarity} onChange={(e) => setProductForm({ ...productForm, rarity: e.target.value })}>
+                    {["C", "U", "R", "RR", "RRR", "SR", "SAR", "UR", "HR", "PROMO"].map((rarity) => <option key={rarity}>{rarity}</option>)}
+                  </SelectInput>
+                  <SelectInput disabled={!isAdmin} value={productForm.condition} onChange={(e) => setProductForm({ ...productForm, condition: e.target.value })}>
+                    {["全新", "近全新", "良好", "輕微白邊", "明顯傷痕"].map((condition) => <option key={condition}>{condition}</option>)}
+                  </SelectInput>
+                  <SelectInput disabled={!isAdmin} value={productForm.unit} onChange={(e) => setProductForm({ ...productForm, unit: e.target.value })}>
+                    {UNIT_OPTIONS.map((unit) => <option key={unit}>{unit}</option>)}
+                  </SelectInput>
+                  <TextInput disabled={!isAdmin} required min="1" type="number" placeholder="每單位張數" value={productForm.cardsPerUnit} onChange={(e) => setProductForm({ ...productForm, cardsPerUnit: e.target.value })} />
+                  <TextInput disabled={!isAdmin} required placeholder="包裝規格，例如 5 張/包" value={productForm.packageSpec} onChange={(e) => setProductForm({ ...productForm, packageSpec: e.target.value })} />
+                  <TextInput disabled={!isAdmin} required min="0" type="number" placeholder="進貨成本" value={productForm.cost} onChange={(e) => setProductForm({ ...productForm, cost: e.target.value })} />
+                  <TextInput disabled={!isAdmin} required min="0" type="number" placeholder="售價" value={productForm.price} onChange={(e) => setProductForm({ ...productForm, price: e.target.value })} />
+                  <TextInput disabled={!isAdmin} required min="0" type="number" placeholder="庫存數量" value={productForm.stock} onChange={(e) => setProductForm({ ...productForm, stock: e.target.value })} />
+                  <TextInput disabled={!isAdmin} required min="0" type="number" placeholder="低庫存門檻" value={productForm.lowStockThreshold} onChange={(e) => setProductForm({ ...productForm, lowStockThreshold: e.target.value })} />
+                  <TextArea disabled={!isAdmin} placeholder="備註" value={productForm.notes} onChange={(e) => setProductForm({ ...productForm, notes: e.target.value })} />
+                </div>
+                <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:gap-2">
+                  <Button disabled={!isAdmin} type="submit" className="w-full sm:w-auto">
+                    <PackagePlus className="h-4 w-4" />
+                    {editingId ? "儲存變更" : "建立商品"}
+                  </Button>
+                  {editingId && <Button variant="secondary" type="button" onClick={() => { setEditingId(null); setProductForm(emptyProduct); }}>取消</Button>}
+                </div>
+              </form>
+
+              <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <h3 className="font-semibold text-slate-900">商品列表</h3>
                 <div className="sticky top-[92px] z-20 w-full bg-white py-1 sm:static sm:w-80 sm:bg-transparent sm:py-0">
                   <Search className="pointer-events-none absolute left-3 top-2.5 h-5 w-5 text-slate-400" />
                   <input
@@ -1077,49 +1114,6 @@ function App() {
                 ))}
               </div>
             </div>
-
-            <form onSubmit={submitProduct} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="mb-4 flex items-center gap-2">
-                <PackagePlus className="h-5 w-5 text-slate-700" />
-                <h2 className="text-lg font-semibold">{editingId ? "編輯商品" : "新增商品"}</h2>
-              </div>
-              {!isAdmin && <p className="mb-3 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-700">店員可查看庫存與新增銷售，但不能新增、編輯或刪除商品。</p>}
-              <div className="grid gap-3">
-                <TextInput disabled={!isAdmin} required placeholder="商品名稱" value={productForm.name} onChange={(e) => setProductForm({ ...productForm, name: e.target.value })} />
-                <TextInput disabled={!isAdmin} required placeholder="卡牌系列" value={productForm.series} onChange={(e) => setProductForm({ ...productForm, series: e.target.value })} />
-                <div className="grid grid-cols-2 gap-3">
-                  <SelectInput disabled={!isAdmin} value={productForm.rarity} onChange={(e) => setProductForm({ ...productForm, rarity: e.target.value })}>
-                    {["C", "U", "R", "RR", "RRR", "SR", "SAR", "UR", "HR", "PROMO"].map((rarity) => <option key={rarity}>{rarity}</option>)}
-                  </SelectInput>
-                  <SelectInput disabled={!isAdmin} value={productForm.condition} onChange={(e) => setProductForm({ ...productForm, condition: e.target.value })}>
-                    {["全新", "近全新", "良好", "輕微白邊", "明顯傷痕"].map((condition) => <option key={condition}>{condition}</option>)}
-                  </SelectInput>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <SelectInput disabled={!isAdmin} value={productForm.unit} onChange={(e) => setProductForm({ ...productForm, unit: e.target.value })}>
-                    {UNIT_OPTIONS.map((unit) => <option key={unit}>{unit}</option>)}
-                  </SelectInput>
-                  <TextInput disabled={!isAdmin} required min="1" type="number" placeholder="每單位張數" value={productForm.cardsPerUnit} onChange={(e) => setProductForm({ ...productForm, cardsPerUnit: e.target.value })} />
-                </div>
-                <TextInput disabled={!isAdmin} required placeholder="包裝規格，例如 5 張/包" value={productForm.packageSpec} onChange={(e) => setProductForm({ ...productForm, packageSpec: e.target.value })} />
-                <div className="grid grid-cols-2 gap-3">
-                  <TextInput disabled={!isAdmin} required min="0" type="number" placeholder="進貨成本" value={productForm.cost} onChange={(e) => setProductForm({ ...productForm, cost: e.target.value })} />
-                  <TextInput disabled={!isAdmin} required min="0" type="number" placeholder="售價" value={productForm.price} onChange={(e) => setProductForm({ ...productForm, price: e.target.value })} />
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <TextInput disabled={!isAdmin} required min="0" type="number" placeholder="庫存數量" value={productForm.stock} onChange={(e) => setProductForm({ ...productForm, stock: e.target.value })} />
-                  <TextInput disabled={!isAdmin} required min="0" type="number" placeholder="低庫存門檻" value={productForm.lowStockThreshold} onChange={(e) => setProductForm({ ...productForm, lowStockThreshold: e.target.value })} />
-                </div>
-                <TextArea disabled={!isAdmin} placeholder="備註" value={productForm.notes} onChange={(e) => setProductForm({ ...productForm, notes: e.target.value })} />
-                <div className="flex flex-col gap-3 sm:flex-row sm:gap-2">
-                  <Button disabled={!isAdmin} type="submit" className="w-full sm:w-auto">
-                    <PackagePlus className="h-4 w-4" />
-                    {editingId ? "儲存變更" : "建立商品"}
-                  </Button>
-                  {editingId && <Button variant="secondary" type="button" onClick={() => { setEditingId(null); setProductForm(emptyProduct); }}>取消</Button>}
-                </div>
-              </div>
-            </form>
           </section>
 
           {isAdmin && (
