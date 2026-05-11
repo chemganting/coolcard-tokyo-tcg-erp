@@ -1326,7 +1326,7 @@ app.patch("/api/products/:id/restore", currentUser, requireAdmin, async (request
   }
 });
 
-function parseCsv(text) {
+function parseDelimitedRows(text, delimiter) {
   const rows = [];
   let current = "";
   let row = [];
@@ -1342,7 +1342,7 @@ function parseCsv(text) {
       index += 1;
     } else if (char === "\"") {
       inQuotes = !inQuotes;
-    } else if (char === "," && !inQuotes) {
+    } else if (char === delimiter && !inQuotes) {
       row.push(current.trim());
       current = "";
     } else if ((char === "\n" || char === "\r") && !inQuotes) {
@@ -1365,6 +1365,22 @@ function parseCsv(text) {
   row.push(current.trim());
   if (row.some((cell) => cell !== "")) rows.push(row);
   return rows;
+}
+
+function parseCsv(text) {
+  const source = String(text ?? "").replace(/^\uFEFF/, "");
+  const candidates = [",", "\t", ";", "，"];
+  const parsed = candidates.map((delimiter) => {
+    const rows = parseDelimitedRows(source, delimiter);
+    return {
+      delimiter,
+      rows,
+      score: rows[0]?.length ?? 0
+    };
+  });
+
+  parsed.sort((a, b) => b.score - a.score);
+  return parsed[0]?.rows ?? [];
 }
 
 const importHeaderMap = {
@@ -1404,10 +1420,14 @@ function normalizeImportHeader(header) {
   return importHeaderMap[value] ?? value;
 }
 
+function normalizeImportCell(value) {
+  return String(value ?? "").replace(/^\uFEFF/, "").trim();
+}
+
 function importValue(row, names) {
   const keys = Array.isArray(names) ? names : [names];
   for (const key of keys) {
-    if (row[key] !== undefined && row[key] !== "") return row[key];
+    if (row[key] !== undefined && String(row[key]).trim() !== "") return row[key];
   }
   return "";
 }
@@ -1434,6 +1454,13 @@ function normalizeImportRows(body) {
     error.statusCode = 400;
     throw error;
   }
+  const requiredHeaders = ["name", "series", "cost", "price", "stock"];
+  const missingHeaders = requiredHeaders.filter((header) => !headers.includes(header));
+  if (missingHeaders.length > 0) {
+    const error = new Error(`CSV 欄位無法對應：缺少 ${missingHeaders.join(", ")}。請確認 header 包含商品名稱、系列、成本、售價、庫存數量。`);
+    error.statusCode = 400;
+    throw error;
+  }
 
   const dataRows = rows.filter((cells) => cells.some((cell) => String(cell ?? "").trim() !== ""));
   if (dataRows.length === 0) {
@@ -1443,7 +1470,7 @@ function normalizeImportRows(body) {
   }
 
   return dataRows.map((cells) =>
-    Object.fromEntries(headers.map((header, index) => [header, cells[index] ?? ""]))
+    Object.fromEntries(headers.map((header, index) => [header, normalizeImportCell(cells[index])]))
   );
 }
 
@@ -1460,8 +1487,9 @@ app.post("/api/products/import", currentUser, requireAdmin, async (request, resp
   try {
     await client.query("BEGIN");
     let imported = 0;
+    const invalidRows = [];
 
-    for (const row of rows) {
+    for (const [index, row] of rows.entries()) {
       const unit = String(importValue(row, ["單位", "unit"]) || "單張").trim();
       const cardsPerUnit = importValue(row, ["cardsPerUnit", "每單位張數", "cards_per_unit"]) || 1;
       const product = productPayload({
@@ -1479,7 +1507,10 @@ app.post("/api/products/import", currentUser, requireAdmin, async (request, resp
         notes: importValue(row, ["備註", "notes"])
       });
 
-      if (!validateProduct(product)) continue;
+      if (!validateProduct(product)) {
+        invalidRows.push(index + 2);
+        continue;
+      }
 
       const inserted = await client.query(
         `
@@ -1509,7 +1540,7 @@ app.post("/api/products/import", currentUser, requireAdmin, async (request, resp
 
     if (imported === 0) {
       await client.query("ROLLBACK");
-      return response.status(400).json({ message: `CSV 已讀取 ${rows.length} 筆，但沒有通過驗證的商品資料。請確認商品名稱、系列、成本、售價與庫存數量。` });
+      return response.status(400).json({ message: `CSV 已成功讀取 ${rows.length} 筆資料列，但第 ${invalidRows.join(", ")} 列未通過驗證。請確認商品名稱、系列、成本、售價與庫存數量。` });
     }
 
     await client.query("COMMIT");

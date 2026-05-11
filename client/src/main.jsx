@@ -604,6 +604,19 @@ function App() {
     }
   };
 
+  const importCsvFile = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setError("");
+    try {
+      setImportCsv(await file.text());
+    } catch {
+      setError("CSV 檔案讀取失敗，請確認檔案為 UTF-8 文字格式");
+    } finally {
+      event.target.value = "";
+    }
+  };
+
   const voidSale = async (sale) => {
     if (!window.confirm(`確定作廢銷售紀錄 #${sale.id}？作廢後會自動補回庫存，銷售紀錄仍會保留。`)) return;
     try {
@@ -1319,16 +1332,22 @@ function App() {
                 <h2 className="text-lg font-semibold">Excel / CSV 商品匯入</h2>
               </div>
               <TextArea
-                placeholder={"貼上 CSV 內容，欄位：商品名稱,卡牌系列,單位,每單位張數,包裝規格,進貨成本,售價,庫存數量"}
+                placeholder={"貼上 UTF-8 CSV 內容，欄位：商品名稱,系列,單位,包裝規格,成本,售價,庫存數量"}
                 value={importCsv}
                 onChange={(e) => setImportCsv(e.target.value)}
               />
               <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <p className="text-sm text-slate-500">支援 Excel 匯出的 CSV。未填稀有度/卡況時會自動補預設值。</p>
-                <Button type="button" className="w-full sm:w-auto" onClick={importProducts}>
-                  <PackagePlus className="h-4 w-4" />
-                  匯入商品
-                </Button>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <label className="inline-flex h-12 cursor-pointer items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-base font-medium text-slate-700 transition hover:bg-slate-50 sm:h-10 sm:px-3 sm:text-sm">
+                    選擇 CSV
+                    <input type="file" accept=".csv,text/csv,text/plain" className="hidden" onChange={importCsvFile} />
+                  </label>
+                  <Button type="button" className="w-full sm:w-auto" onClick={importProducts}>
+                    <PackagePlus className="h-4 w-4" />
+                    匯入商品
+                  </Button>
+                </div>
               </div>
             </section>
           )}
