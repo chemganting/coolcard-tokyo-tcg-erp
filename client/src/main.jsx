@@ -51,7 +51,7 @@ const PRODUCT_TYPE_OPTIONS = [
   { value: "graded", label: "PSA商品" }
 ];
 const GRADING_COMPANIES = ["PSA", "BGS", "CGC"];
-const PRODUCT_PAGE_SIZE = 20;
+const LIST_PAGE_SIZE = 10;
 const INVENTORY_LOG_TYPE_OPTIONS = [
   { value: "全部", label: "全部異動類型" },
   { value: "purchase", label: "進貨" },
@@ -164,6 +164,56 @@ function productTypeTone(productType) {
 
 function productBadgeLabel(product) {
   return product.productType === "graded" ? (product.grade ?? "-") : "-";
+}
+
+function buildPageNumbers(currentPage, pageCount) {
+  const pages = [];
+  if (pageCount <= 7) {
+    for (let page = 1; page <= pageCount; page += 1) pages.push(page);
+    return pages;
+  }
+
+  pages.push(1);
+  const start = Math.max(2, currentPage - 1);
+  const end = Math.min(pageCount - 1, currentPage + 1);
+  if (start > 2) pages.push("...");
+  for (let page = start; page <= end; page += 1) pages.push(page);
+  if (end < pageCount - 1) pages.push("...");
+  pages.push(pageCount);
+  return pages;
+}
+
+function PaginationFooter({ page, pageCount, onPageChange, summary }) {
+  if (pageCount <= 1) return null;
+  const pages = buildPageNumbers(page, pageCount);
+  return (
+    <div className="mt-4 flex flex-col gap-3 border-t border-slate-200 pt-4 sm:flex-row sm:items-center sm:justify-between">
+      <p className="text-sm text-slate-500">{summary}</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button type="button" variant="secondary" disabled={page <= 1} onClick={() => onPageChange(Math.max(1, page - 1))}>
+          上一頁
+        </Button>
+        {pages.map((item, index) =>
+          item === "..." ? (
+            <span key={`ellipsis-${index}`} className="px-2 text-sm text-slate-400">...</span>
+          ) : (
+            <Button
+              key={item}
+              type="button"
+              variant={item === page ? "primary" : "secondary"}
+              aria-current={item === page ? "page" : undefined}
+              onClick={() => onPageChange(item)}
+            >
+              {item}
+            </Button>
+          )
+        )}
+        <Button type="button" variant="secondary" disabled={page >= pageCount} onClick={() => onPageChange(Math.min(pageCount, page + 1))}>
+          下一頁
+        </Button>
+      </div>
+    </div>
+  );
 }
 
 function normalizeInventoryLogType(type) {
@@ -445,6 +495,7 @@ function App() {
   const [productForm, setProductForm] = useState(emptyProduct);
   const [purchaseForm, setPurchaseForm] = useState(emptyPurchase);
   const [editingPurchaseId, setEditingPurchaseId] = useState(null);
+  const [purchasePage, setPurchasePage] = useState(1);
   const [purchaseFilters, setPurchaseFilters] = useState({
     from: new Date(new Date().setDate(new Date().getDate() - 30)).toISOString().slice(0, 10),
     to: new Date().toISOString().slice(0, 10),
@@ -460,6 +511,7 @@ function App() {
   const [editingId, setEditingId] = useState(null);
   const [saleForm, setSaleForm] = useState({ productId: "", quantity: 1, saleUnit: "單張", cardsPerUnit: "1", unitPrice: "", soldAt: new Date().toISOString().slice(0, 10) });
   const [dateRange, setDateRange] = useState({ from: new Date().toISOString().slice(0, 10), to: new Date().toISOString().slice(0, 10) });
+  const [salePage, setSalePage] = useState(1);
   const productAutosaveReady = useRef(false);
   const employeeAutosaveReady = useRef(false);
 
@@ -611,12 +663,26 @@ function App() {
       })
       .sort((a, b) => stockSort === "asc" ? a.stock - b.stock : b.stock - a.stock);
   }, [products, searchInput, productTypeFilter, gradeSearch, certSearch, unitFilter, stockSort]);
-  const productPageCount = Math.max(1, Math.ceil(filteredProducts.length / PRODUCT_PAGE_SIZE));
+  const productPageCount = Math.max(1, Math.ceil(filteredProducts.length / LIST_PAGE_SIZE));
   const currentProductPage = Math.min(productPage, productPageCount);
   const visibleProducts = useMemo(() => {
-    const start = (currentProductPage - 1) * PRODUCT_PAGE_SIZE;
-    return filteredProducts.slice(start, start + PRODUCT_PAGE_SIZE);
+    const start = (currentProductPage - 1) * LIST_PAGE_SIZE;
+    return filteredProducts.slice(start, start + LIST_PAGE_SIZE);
   }, [filteredProducts, currentProductPage]);
+  const filteredPurchases = purchases;
+  const purchasePageCount = Math.max(1, Math.ceil(filteredPurchases.length / LIST_PAGE_SIZE));
+  const currentPurchasePage = Math.min(purchasePage, purchasePageCount);
+  const visiblePurchases = useMemo(() => {
+    const start = (currentPurchasePage - 1) * LIST_PAGE_SIZE;
+    return filteredPurchases.slice(start, start + LIST_PAGE_SIZE);
+  }, [filteredPurchases, currentPurchasePage]);
+  const filteredSales = sales;
+  const salePageCount = Math.max(1, Math.ceil(filteredSales.length / LIST_PAGE_SIZE));
+  const currentSalePage = Math.min(salePage, salePageCount);
+  const visibleSales = useMemo(() => {
+    const start = (currentSalePage - 1) * LIST_PAGE_SIZE;
+    return filteredSales.slice(start, start + LIST_PAGE_SIZE);
+  }, [filteredSales, currentSalePage]);
   const quickSaleProducts = useMemo(() => products.filter((product) => product.stock > 0).slice(0, 12), [products]);
   const quickSaleTotal = useMemo(
     () => quickSaleItems.reduce((sum, item) => sum + item.quantity * Number(item.product.price || 0), 0),
@@ -656,8 +722,24 @@ function App() {
   }, [searchInput, productTypeFilter, gradeSearch, certSearch, unitFilter, stockSort]);
 
   useEffect(() => {
+    setPurchasePage(1);
+  }, [purchaseFilters.from, purchaseFilters.to, purchaseFilters.supplier, purchaseFilters.product, purchaseFilters.paymentStatus]);
+
+  useEffect(() => {
+    setSalePage(1);
+  }, [dateRange.from, dateRange.to]);
+
+  useEffect(() => {
     if (productPage > productPageCount) setProductPage(productPageCount);
   }, [productPage, productPageCount]);
+
+  useEffect(() => {
+    if (purchasePage > purchasePageCount) setPurchasePage(purchasePageCount);
+  }, [purchasePage, purchasePageCount]);
+
+  useEffect(() => {
+    if (salePage > salePageCount) setSalePage(salePageCount);
+  }, [salePage, salePageCount]);
 
   useEffect(() => {
     if (!editingId) return undefined;
@@ -729,11 +811,11 @@ function App() {
   const submitProduct = async (event) => {
     event.preventDefault();
     setError("");
-      const payload = {
-        ...productForm,
-        cardsPerUnit: Number(productForm.cardsPerUnit),
-        cost: Number(productForm.cost),
-        price: Number(productForm.price),
+    const payload = {
+      ...productForm,
+      cardsPerUnit: Number(productForm.cardsPerUnit),
+      cost: Number(productForm.cost),
+      price: Number(productForm.price),
       stock: Number(productForm.stock),
       lowStockThreshold: Number(productForm.lowStockThreshold)
     };
@@ -1754,18 +1836,12 @@ function App() {
                   ))}
                   {visibleProducts.length === 0 && <p className="py-6 text-center text-slate-500">沒有符合條件的商品</p>}
                 </div>
-                <div className="mt-4 flex flex-col gap-3 border-t border-slate-200 pt-4 sm:flex-row sm:items-center sm:justify-between">
-                  <p className="text-sm text-slate-500">每頁 {PRODUCT_PAGE_SIZE} 筆，目前顯示 {number.format(visibleProducts.length)} 筆</p>
-                  <div className="flex items-center gap-2">
-                    <Button type="button" variant="secondary" disabled={productPage <= 1} onClick={() => setProductPage((page) => Math.max(1, page - 1))}>
-                      上一頁
-                    </Button>
-                    <span className="min-w-20 text-center text-sm text-slate-600">{currentProductPage} / {productPageCount}</span>
-                    <Button type="button" variant="secondary" disabled={productPage >= productPageCount} onClick={() => setProductPage((page) => Math.min(productPageCount, page + 1))}>
-                      下一頁
-                    </Button>
-                  </div>
-                </div>
+                <PaginationFooter
+                  page={currentProductPage}
+                  pageCount={productPageCount}
+                  onPageChange={setProductPage}
+                  summary={`每頁 ${LIST_PAGE_SIZE} 筆，目前顯示 ${number.format(visibleProducts.length)} 筆，第 ${number.format(currentProductPage)} / ${number.format(productPageCount)} 頁`}
+                />
               </div>
             </div>
 
@@ -2132,7 +2208,7 @@ function App() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {purchases.map((purchase) => (
+                    {visiblePurchases.map((purchase) => (
                       <tr key={purchase.id}>
                         <td className="py-3 pr-4">{purchase.purchaseDate}</td>
                         <td className="py-3 pr-4">{purchase.supplier}</td>
@@ -2155,7 +2231,7 @@ function App() {
                         </td>
                       </tr>
                     ))}
-                    {purchases.length === 0 && (
+                    {visiblePurchases.length === 0 && (
                       <tr>
                         <td className="py-6 text-center text-slate-500" colSpan="8">尚無進貨紀錄</td>
                       </tr>
@@ -2164,7 +2240,7 @@ function App() {
                 </table>
               </div>
               <div className="grid gap-3 lg:hidden">
-                {purchases.map((purchase) => (
+                {visiblePurchases.map((purchase) => (
                   <article key={purchase.id} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
@@ -2187,8 +2263,14 @@ function App() {
                     </div>
                   </article>
                 ))}
-                {purchases.length === 0 && <p className="py-6 text-center text-slate-500">尚無進貨紀錄</p>}
+                {visiblePurchases.length === 0 && <p className="py-6 text-center text-slate-500">尚無進貨紀錄</p>}
               </div>
+              <PaginationFooter
+                page={currentPurchasePage}
+                pageCount={purchasePageCount}
+                onPageChange={setPurchasePage}
+                summary={`每頁 ${LIST_PAGE_SIZE} 筆，目前顯示 ${number.format(visiblePurchases.length)} 筆，第 ${number.format(currentPurchasePage)} / ${number.format(purchasePageCount)} 頁`}
+              />
             </div>
           </section>
 
@@ -2299,7 +2381,7 @@ function App() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {sales.map((sale) => (
+                    {visibleSales.map((sale) => (
                       <tr key={sale.id}>
                         <td className="py-3 pr-4">{sale.soldAt}</td>
                         <td className="py-3 pr-4 font-medium">{sale.productName}<p className="text-xs text-slate-500">{sale.productSeries}</p></td>
@@ -2325,7 +2407,7 @@ function App() {
                 </table>
               </div>
               <div className="grid gap-3 lg:hidden">
-                {sales.map((sale) => (
+                    {visibleSales.map((sale) => (
                   <article key={sale.id} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
                     <div className="flex items-start justify-between gap-3">
                       <div>
@@ -2347,6 +2429,12 @@ function App() {
                   </article>
                 ))}
               </div>
+              <PaginationFooter
+                page={currentSalePage}
+                pageCount={salePageCount}
+                onPageChange={setSalePage}
+                summary={`每頁 ${LIST_PAGE_SIZE} 筆，目前顯示 ${number.format(visibleSales.length)} 筆，第 ${number.format(currentSalePage)} / ${number.format(salePageCount)} 頁`}
+              />
             </div>
           </section>
 
