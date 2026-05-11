@@ -1222,6 +1222,9 @@ app.use((error, _request, response, _next) => {
 
 initDb()
   .then(() => {
+    return ensureBackupDir();
+  })
+  .then(() => {
     app.listen(port, "0.0.0.0", () => {
       console.log(`Coolcard Tokyo TCG ERP API listening on http://localhost:${port}`);
     });

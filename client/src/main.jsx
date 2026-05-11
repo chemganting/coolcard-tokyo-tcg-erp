@@ -254,7 +254,7 @@ function App() {
       api("/dashboard"),
       api("/profit-report"),
       isAdmin ? api("/users") : Promise.resolve([]),
-      isAdmin ? api("/backups") : Promise.resolve([])
+      isAdmin ? api("/backups").catch(() => []) : Promise.resolve([])
     ]);
     setProducts(productRows);
     setSales(saleRows);
