@@ -250,6 +250,9 @@ function App() {
   const [profitReport, setProfitReport] = useState(null);
   const [syncingSheet, setSyncingSheet] = useState(false);
   const [clearingDemoData, setClearingDemoData] = useState(false);
+  const [auditOpen, setAuditOpen] = useState(false);
+  const [auditLoaded, setAuditLoaded] = useState(false);
+  const [auditLoading, setAuditLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [autoSaveStatus, setAutoSaveStatus] = useState("");
   const [undoing, setUndoing] = useState(false);
@@ -300,15 +303,14 @@ function App() {
     setLoading(true);
     const saleQuery = `?from=${dateRange.from}&to=${dateRange.to}`;
     try {
-      const [productRows, deletedProductRows, saleRows, dashboardRow, profitRow, employeeRows, backupRows, auditRows] = await Promise.all([
+      const [productRows, deletedProductRows, saleRows, dashboardRow, profitRow, employeeRows, backupRows] = await Promise.all([
         api(`/products?q=${encodeURIComponent(query)}`),
         isAdmin ? api("/products/deleted").catch(() => []) : Promise.resolve([]),
         api(`/sales${saleQuery}`),
         api("/dashboard"),
         api("/profit-report"),
         isAdmin ? api("/users") : Promise.resolve([]),
-        isAdmin ? api("/backups").catch(() => []) : Promise.resolve([]),
-        api("/audit-logs").catch(() => [])
+        isAdmin ? api("/backups").catch(() => []) : Promise.resolve([])
       ]);
       setProducts(productRows);
       setDeletedProducts(deletedProductRows);
@@ -317,9 +319,28 @@ function App() {
       setProfitReport(profitRow);
       setEmployees(employeeRows);
       setBackups(backupRows);
-      setAuditLogs(auditRows);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadAuditLogs = async () => {
+    if (!auth?.token) return;
+    setAuditLoading(true);
+    try {
+      const rows = await api("/audit-logs").catch(() => []);
+      setAuditLogs(rows);
+      setAuditLoaded(true);
+    } finally {
+      setAuditLoading(false);
+    }
+  };
+
+  const toggleAuditLogs = async () => {
+    const nextOpen = !auditOpen;
+    setAuditOpen(nextOpen);
+    if (nextOpen && !auditLoaded) {
+      await loadAuditLogs();
     }
   };
 
@@ -354,6 +375,9 @@ function App() {
     () => quickSaleItems.reduce((sum, item) => sum + item.quantity * Number(item.product.price || 0), 0),
     [quickSaleItems]
   );
+  const latestAuditTime = auditLogs[0]?.createdAt
+    ? new Date(auditLogs[0].createdAt).toLocaleString("zh-TW")
+    : (auditLoaded ? "尚無紀錄" : "尚未載入");
 
   useEffect(() => {
     if (!editingId) return undefined;
@@ -1467,73 +1491,6 @@ function App() {
             </div>
           </section>
 
-          <section id="操作紀錄" className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-            <div className="mb-4 flex items-center gap-2">
-              <History className="h-5 w-5 text-slate-700" />
-              <h2 className="text-lg font-semibold">操作紀錄</h2>
-            </div>
-            <div className="hidden overflow-x-auto lg:block">
-              <table className="min-w-full table-auto text-left text-sm">
-                <thead className="border-b border-slate-200 text-xs text-slate-500">
-                  <tr>
-                    <th className="py-3 pr-4">時間</th>
-                    <th className="py-3 pr-4">操作者</th>
-                    <th className="py-3 pr-4">操作</th>
-                    <th className="py-3 pr-4">資料類型</th>
-                    <th className="py-3 pr-4">狀態</th>
-                    <th className="py-3">摘要</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {auditLogs.map((log) => {
-                    const beforeName = log.beforeData?.name || log.beforeData?.sale?.id || log.beforeData?.username || log.beforeData?.product?.name;
-                    const afterName = log.afterData?.name || log.afterData?.sale?.id || log.afterData?.username || log.afterData?.product?.name;
-                    return (
-                      <tr key={log.id}>
-                        <td className="py-3 pr-4">{new Date(log.createdAt).toLocaleString("zh-TW")}</td>
-                        <td className="py-3 pr-4">{log.username}</td>
-                        <td className="py-3 pr-4">{actionLabels[log.actionType] ?? log.actionType}</td>
-                        <td className="py-3 pr-4">{entityLabels[log.entityType] ?? log.entityType}</td>
-                        <td className="py-3 pr-4">
-                          <span className={`rounded px-2 py-1 text-xs font-medium ${log.undoneAt ? "bg-slate-100 text-slate-600" : "bg-emerald-50 text-emerald-700"}`}>
-                            {log.undoneAt ? "已還原" : "可還原"}
-                          </span>
-                        </td>
-                        <td className="py-3 text-slate-600">{beforeName || afterName || `#${log.id}`}</td>
-                      </tr>
-                    );
-                  })}
-                  {auditLogs.length === 0 && (
-                    <tr>
-                      <td className="py-6 text-center text-slate-500" colSpan="6">尚無操作紀錄</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-            <div className="grid gap-3 lg:hidden">
-              {auditLogs.map((log) => {
-                const beforeName = log.beforeData?.name || log.beforeData?.sale?.id || log.beforeData?.username || log.beforeData?.product?.name;
-                const afterName = log.afterData?.name || log.afterData?.sale?.id || log.afterData?.username || log.afterData?.product?.name;
-                return (
-                  <article key={log.id} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="font-semibold">{actionLabels[log.actionType] ?? log.actionType} {entityLabels[log.entityType] ?? log.entityType}</p>
-                        <p className="mt-1 text-sm text-slate-500">{log.username} · {new Date(log.createdAt).toLocaleString("zh-TW")}</p>
-                      </div>
-                      <span className={`rounded px-2 py-1 text-xs font-medium ${log.undoneAt ? "bg-slate-100 text-slate-600" : "bg-emerald-50 text-emerald-700"}`}>
-                        {log.undoneAt ? "已還原" : "可還原"}
-                      </span>
-                    </div>
-                    <p className="mt-2 text-sm text-slate-600">{beforeName || afterName || `#${log.id}`}</p>
-                  </article>
-                );
-              })}
-              {auditLogs.length === 0 && <p className="py-6 text-center text-slate-500">尚無操作紀錄</p>}
-            </div>
-          </section>
-
           {isAdmin && (
             <section id="員工管理" className="grid min-w-0 gap-6 xl:grid-cols-[minmax(280px,0.75fr)_minmax(0,1.25fr)]">
               <form onSubmit={submitEmployee} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
@@ -1825,6 +1782,102 @@ function App() {
               </div>
             </section>
           )}
+
+          <section id="操作紀錄" className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+            <button
+              type="button"
+              className="flex w-full flex-col gap-3 px-4 py-4 text-left transition hover:bg-slate-50 sm:flex-row sm:items-center sm:justify-between"
+              aria-expanded={auditOpen}
+              onClick={toggleAuditLogs}
+            >
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-slate-100 text-slate-700">
+                  <History className="h-5 w-5" />
+                </div>
+                <div className="min-w-0">
+                  <h2 className="text-lg font-semibold text-slate-950">操作紀錄</h2>
+                  <p className="mt-1 text-sm text-slate-500">最新操作時間：{latestAuditTime}</p>
+                </div>
+              </div>
+              <div className="flex shrink-0 items-center justify-between gap-3 sm:justify-end">
+                <span className="rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600">操作筆數：{auditLoaded ? `${auditLogs.length} 筆` : "尚未載入"}</span>
+                <span className="grid h-10 w-10 place-items-center rounded-md border border-slate-200 text-slate-600">
+                  {auditOpen ? <Minus className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+                </span>
+              </div>
+            </button>
+
+            {auditOpen && (
+              <div className="border-t border-slate-200 p-4">
+                {auditLoading ? (
+                  <p className="py-6 text-center text-slate-500">載入操作紀錄中...</p>
+                ) : (
+                  <>
+                    <div className="hidden overflow-x-auto lg:block">
+                      <table className="min-w-full table-auto text-left text-sm">
+                        <thead className="border-b border-slate-200 text-xs text-slate-500">
+                          <tr>
+                            <th className="py-3 pr-4">時間</th>
+                            <th className="py-3 pr-4">操作者</th>
+                            <th className="py-3 pr-4">操作</th>
+                            <th className="py-3 pr-4">資料類型</th>
+                            <th className="py-3 pr-4">狀態</th>
+                            <th className="py-3">摘要</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {auditLogs.map((log) => {
+                            const beforeName = log.beforeData?.name || log.beforeData?.sale?.id || log.beforeData?.username || log.beforeData?.product?.name;
+                            const afterName = log.afterData?.name || log.afterData?.sale?.id || log.afterData?.username || log.afterData?.product?.name;
+                            return (
+                              <tr key={log.id}>
+                                <td className="py-3 pr-4">{new Date(log.createdAt).toLocaleString("zh-TW")}</td>
+                                <td className="py-3 pr-4">{log.username}</td>
+                                <td className="py-3 pr-4">{actionLabels[log.actionType] ?? log.actionType}</td>
+                                <td className="py-3 pr-4">{entityLabels[log.entityType] ?? log.entityType}</td>
+                                <td className="py-3 pr-4">
+                                  <span className={`rounded px-2 py-1 text-xs font-medium ${log.undoneAt ? "bg-slate-100 text-slate-600" : "bg-emerald-50 text-emerald-700"}`}>
+                                    {log.undoneAt ? "已還原" : "可還原"}
+                                  </span>
+                                </td>
+                                <td className="py-3 text-slate-600">{beforeName || afterName || `#${log.id}`}</td>
+                              </tr>
+                            );
+                          })}
+                          {auditLogs.length === 0 && (
+                            <tr>
+                              <td className="py-6 text-center text-slate-500" colSpan="6">尚無操作紀錄</td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="grid gap-3 lg:hidden">
+                      {auditLogs.map((log) => {
+                        const beforeName = log.beforeData?.name || log.beforeData?.sale?.id || log.beforeData?.username || log.beforeData?.product?.name;
+                        const afterName = log.afterData?.name || log.afterData?.sale?.id || log.afterData?.username || log.afterData?.product?.name;
+                        return (
+                          <article key={log.id} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <p className="font-semibold">{actionLabels[log.actionType] ?? log.actionType} {entityLabels[log.entityType] ?? log.entityType}</p>
+                                <p className="mt-1 text-sm text-slate-500">{log.username} · {new Date(log.createdAt).toLocaleString("zh-TW")}</p>
+                              </div>
+                              <span className={`rounded px-2 py-1 text-xs font-medium ${log.undoneAt ? "bg-slate-100 text-slate-600" : "bg-emerald-50 text-emerald-700"}`}>
+                                {log.undoneAt ? "已還原" : "可還原"}
+                              </span>
+                            </div>
+                            <p className="mt-2 text-sm text-slate-600">{beforeName || afterName || `#${log.id}`}</p>
+                          </article>
+                        );
+                      })}
+                      {auditLogs.length === 0 && <p className="py-6 text-center text-slate-500">尚無操作紀錄</p>}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </section>
         </div>
       </main>
 
