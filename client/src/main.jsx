@@ -467,6 +467,7 @@ function App() {
   const [syncingSheet, setSyncingSheet] = useState(false);
   const [clearingDemoData, setClearingDemoData] = useState(false);
   const [backupOpen, setBackupOpen] = useState(false);
+  const [deletedProductsOpen, setDeletedProductsOpen] = useState(false);
   const [auditOpen, setAuditOpen] = useState(false);
   const [inventoryOpen, setInventoryOpen] = useState(false);
   const [auditLoaded, setAuditLoaded] = useState(false);
@@ -486,6 +487,7 @@ function App() {
   const [productTypeFilter, setProductTypeFilter] = useState("全部");
   const [gradeSearch, setGradeSearch] = useState("");
   const [certSearch, setCertSearch] = useState("");
+  const [deletedProductSearch, setDeletedProductSearch] = useState("");
   const [unitFilter, setUnitFilter] = useState("全部");
   const [stockSort, setStockSort] = useState("asc");
   const [productPage, setProductPage] = useState(1);
@@ -663,6 +665,20 @@ function App() {
       })
       .sort((a, b) => stockSort === "asc" ? a.stock - b.stock : b.stock - a.stock);
   }, [products, searchInput, productTypeFilter, gradeSearch, certSearch, unitFilter, stockSort]);
+  const filteredDeletedProducts = useMemo(() => {
+    const keyword = deletedProductSearch.trim().toLowerCase();
+    return deletedProducts.filter((product) => {
+      if (!keyword) return true;
+      return [
+        product.name,
+        product.series,
+        product.rarity,
+        product.productType,
+        product.grade,
+        product.deletedByName
+      ].some((value) => String(value ?? "").toLowerCase().includes(keyword));
+    });
+  }, [deletedProducts, deletedProductSearch]);
   const productPageCount = Math.max(1, Math.ceil(filteredProducts.length / LIST_PAGE_SIZE));
   const currentProductPage = Math.min(productPage, productPageCount);
   const visibleProducts = useMemo(() => {
@@ -1845,73 +1861,6 @@ function App() {
               </div>
             </div>
 
-            {isAdmin && (
-              <div className="mt-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-                <div className="mb-4 flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2">
-                    <Trash2 className="h-5 w-5 text-slate-700" />
-                    <h3 className="font-semibold text-slate-900">已刪除商品列表</h3>
-                  </div>
-                  <span className="rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600">{deletedProducts.length} 筆</span>
-                </div>
-
-                <div className="hidden overflow-x-auto lg:block">
-                  <table className="min-w-full table-auto text-left text-sm">
-                    <thead className="border-b border-slate-200 text-xs text-slate-500">
-                      <tr>
-                        <th className="py-3 pr-4">商品名稱</th>
-                        <th className="py-3 pr-4">系列</th>
-                        <th className="py-3 pr-4">庫存</th>
-                        <th className="py-3 pr-4">刪除時間</th>
-                        <th className="py-3 pr-4">執行人</th>
-                        <th className="py-3">操作</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {deletedProducts.map((product) => (
-                        <tr key={product.id}>
-                          <td className="py-3 pr-4 font-medium">{product.name}</td>
-                          <td className="py-3 pr-4">{product.series} · {product.rarity}</td>
-                          <td className="py-3 pr-4">{formatStock(product)}</td>
-                          <td className="py-3 pr-4">{product.deletedAt ? new Date(product.deletedAt).toLocaleString("zh-TW") : "-"}</td>
-                          <td className="py-3 pr-4">{product.deletedByName ?? "-"}</td>
-                          <td className="py-3">
-                            <Button type="button" variant="secondary" onClick={() => restoreProduct(product)}>
-                              <RotateCcw className="h-4 w-4" />
-                              還原
-                            </Button>
-                          </td>
-                        </tr>
-                      ))}
-                      {deletedProducts.length === 0 && (
-                        <tr>
-                          <td className="py-6 text-center text-slate-500" colSpan="6">尚無已刪除商品</td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-
-                <div className="grid gap-3 lg:hidden">
-                  {deletedProducts.map((product) => (
-                    <article key={product.id} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="truncate font-semibold">{product.name}</p>
-                          <p className="mt-1 text-sm text-slate-500">{product.series} · {formatStock(product)}</p>
-                          <p className="mt-1 text-xs text-slate-500">{product.deletedAt ? new Date(product.deletedAt).toLocaleString("zh-TW") : "-"}</p>
-                        </div>
-                        <Button type="button" variant="secondary" onClick={() => restoreProduct(product)}>
-                          <RotateCcw className="h-4 w-4" />
-                          還原
-                        </Button>
-                      </div>
-                    </article>
-                  ))}
-                  {deletedProducts.length === 0 && <p className="py-6 text-center text-slate-500">尚無已刪除商品</p>}
-                </div>
-              </div>
-            )}
           </section>
 
           <section id="庫存異動紀錄" className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
@@ -2699,6 +2648,105 @@ function App() {
                   </div>
                   <div className="mb-4 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">
                     清除測試資料會先自動建立備份，接著移除預設商品、庫存、銷售紀錄、報表資料與測試操作紀錄；不會清空 users 表或刪除 admin、clerk、員工帳號。
+                  </div>
+
+                  <div className="mb-4 overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+                    <button
+                      type="button"
+                      className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition hover:bg-slate-100"
+                      aria-expanded={deletedProductsOpen}
+                      onClick={() => setDeletedProductsOpen((open) => !open)}
+                    >
+                      <div className="min-w-0">
+                        <h3 className="text-base font-semibold text-slate-900">已刪除商品列表</h3>
+                        <p className="mt-1 text-sm text-slate-500">包含 soft delete 的商品，預設收起，不佔用主要版面。</p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <span className="rounded bg-white px-2 py-1 text-xs font-medium text-slate-600">{filteredDeletedProducts.length} 筆</span>
+                        <ChevronDown className={`h-4 w-4 text-slate-500 transition-transform duration-300 ${deletedProductsOpen ? "rotate-180" : ""}`} />
+                      </div>
+                    </button>
+                    <div
+                      className="overflow-hidden transition-[max-height,opacity] duration-300 ease-out"
+                      style={{ maxHeight: deletedProductsOpen ? "3000px" : "0px", opacity: deletedProductsOpen ? 1 : 0 }}
+                      aria-hidden={!deletedProductsOpen}
+                    >
+                      <div className="border-t border-slate-200 px-4 py-4">
+                        <div className="mb-4 grid gap-3 lg:grid-cols-[minmax(220px,1fr)_180px]">
+                          <div className="relative min-w-0">
+                            <Search className="pointer-events-none absolute left-3 top-2.5 h-5 w-5 text-slate-400" />
+                            <input
+                              value={deletedProductSearch}
+                              onChange={(event) => setDeletedProductSearch(event.target.value)}
+                              placeholder="搜尋已刪除商品"
+                              className="h-12 w-full rounded-md border border-slate-300 bg-white pl-10 pr-3 text-base outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-100 sm:h-10 sm:text-sm"
+                            />
+                          </div>
+                          <div className="flex items-center rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-500">
+                            顯示 {number.format(filteredDeletedProducts.length)} 筆已刪除商品
+                          </div>
+                        </div>
+
+                        <div className="hidden overflow-x-auto lg:block">
+                          <table className="min-w-full table-auto text-left text-sm">
+                            <thead className="border-b border-slate-200 text-xs text-slate-500">
+                              <tr>
+                                <th className="py-3 pr-4">商品名稱</th>
+                                <th className="py-3 pr-4">商品類型</th>
+                                <th className="py-3 pr-4">刪除時間</th>
+                                <th className="py-3 pr-4">刪除人</th>
+                                <th className="py-3">操作</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                              {filteredDeletedProducts.map((product) => (
+                                <tr key={product.id}>
+                                  <td className="py-3 pr-4 font-medium">{product.name}</td>
+                                  <td className="py-3 pr-4">
+                                    <span className={`rounded px-2 py-1 text-xs font-medium ${productTypeTone(product.productType)}`}>
+                                      {productTypeLabel(product.productType)}
+                                    </span>
+                                  </td>
+                                  <td className="py-3 pr-4">{product.deletedAt ? new Date(product.deletedAt).toLocaleString("zh-TW") : "-"}</td>
+                                  <td className="py-3 pr-4">{product.deletedByName ?? "-"}</td>
+                                  <td className="py-3">
+                                    <Button type="button" variant="secondary" onClick={() => restoreProduct(product)}>
+                                      <RotateCcw className="h-4 w-4" />
+                                      還原
+                                    </Button>
+                                  </td>
+                                </tr>
+                              ))}
+                              {filteredDeletedProducts.length === 0 && (
+                                <tr>
+                                  <td className="py-6 text-center text-slate-500" colSpan="5">尚無已刪除商品</td>
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+
+                        <div className="grid gap-3 lg:hidden">
+                          {filteredDeletedProducts.map((product) => (
+                            <article key={product.id} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <p className="truncate font-semibold">{product.name}</p>
+                                  <p className="mt-1 text-sm text-slate-500">{productTypeLabel(product.productType)}</p>
+                                  <p className="mt-1 text-sm text-slate-500">{product.deletedAt ? new Date(product.deletedAt).toLocaleString("zh-TW") : "-"}</p>
+                                  <p className="mt-1 text-xs text-slate-500">{product.deletedByName ?? "-"}</p>
+                                </div>
+                                <Button type="button" variant="secondary" onClick={() => restoreProduct(product)}>
+                                  <RotateCcw className="h-4 w-4" />
+                                  還原
+                                </Button>
+                              </div>
+                            </article>
+                          ))}
+                          {filteredDeletedProducts.length === 0 && <p className="py-6 text-center text-slate-500">尚無已刪除商品</p>}
+                        </div>
+                      </div>
+                    </div>
                   </div>
 
                   <div className="hidden overflow-x-auto lg:block">
