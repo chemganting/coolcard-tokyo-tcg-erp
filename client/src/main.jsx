@@ -9,7 +9,10 @@ import {
   LogOut,
   ExternalLink,
   History,
+  Menu,
+  Minus,
   PackagePlus,
+  Plus,
   Search,
   ShieldCheck,
   ShoppingCart,
@@ -18,7 +21,8 @@ import {
   RotateCcw,
   Undo2,
   UserRound,
-  Warehouse
+  Warehouse,
+  X
 } from "lucide-react";
 import "./index.css";
 
@@ -88,7 +92,7 @@ function TextInput(props) {
   return (
     <input
       {...props}
-      className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm outline-none transition focus:border-teal-600 focus:ring-2 focus:ring-teal-100"
+      className="h-12 rounded-md border border-slate-300 bg-white px-3 text-base outline-none transition focus:border-teal-600 focus:ring-2 focus:ring-teal-100 sm:h-10 sm:text-sm"
     />
   );
 }
@@ -97,7 +101,7 @@ function SelectInput(props) {
   return (
     <select
       {...props}
-      className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm outline-none transition focus:border-teal-600 focus:ring-2 focus:ring-teal-100"
+      className="h-12 rounded-md border border-slate-300 bg-white px-3 text-base outline-none transition focus:border-teal-600 focus:ring-2 focus:ring-teal-100 sm:h-10 sm:text-sm"
     />
   );
 }
@@ -106,7 +110,7 @@ function TextArea(props) {
   return (
     <textarea
       {...props}
-      className="min-h-20 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-teal-600 focus:ring-2 focus:ring-teal-100"
+      className="min-h-24 rounded-md border border-slate-300 bg-white px-3 py-2 text-base outline-none transition focus:border-teal-600 focus:ring-2 focus:ring-teal-100 sm:min-h-20 sm:text-sm"
     />
   );
 }
@@ -121,7 +125,7 @@ function Button({ variant = "primary", children, className = "", ...props }) {
   return (
     <button
       {...props}
-      className={`inline-flex h-10 items-center justify-center gap-2 rounded-md px-3 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${variants[variant]} ${className}`}
+      className={`inline-flex h-12 items-center justify-center gap-2 rounded-md px-4 text-base font-medium transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 sm:h-10 sm:px-3 sm:text-sm ${variants[variant]} ${className}`}
     >
       {children}
     </button>
@@ -141,6 +145,16 @@ function StatCard({ icon: Icon, label, value, detail, tone }) {
         </div>
       </div>
       <p className="mt-3 text-sm text-slate-500">{detail}</p>
+    </section>
+  );
+}
+
+function SkeletonCard() {
+  return (
+    <section className="animate-pulse rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="h-4 w-24 rounded bg-slate-200" />
+      <div className="mt-4 h-8 w-32 rounded bg-slate-200" />
+      <div className="mt-4 h-4 w-40 rounded bg-slate-100" />
     </section>
   );
 }
@@ -233,9 +247,13 @@ function App() {
   const [dashboard, setDashboard] = useState(null);
   const [profitReport, setProfitReport] = useState(null);
   const [syncingSheet, setSyncingSheet] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [autoSaveStatus, setAutoSaveStatus] = useState("");
   const [undoing, setUndoing] = useState(false);
   const [query, setQuery] = useState("");
+  const [searchInput, setSearchInput] = useState("");
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [quickSaleItems, setQuickSaleItems] = useState([]);
   const [error, setError] = useState("");
   const [productForm, setProductForm] = useState(emptyProduct);
   const [employeeForm, setEmployeeForm] = useState(emptyEmployee);
@@ -250,6 +268,14 @@ function App() {
   const employeeAutosaveReady = useRef(false);
 
   const isAdmin = auth?.user?.role === "admin";
+  const navigationItems = useMemo(() => ([
+    [BarChart3, "營業額儀表板"],
+    [TrendingUp, "利潤分析"],
+    [Boxes, "商品庫存"],
+    [ShoppingCart, "銷售管理"],
+    [History, "操作紀錄"],
+    ...(isAdmin ? [[UserRound, "員工管理"], [Database, "系統備份"]] : [])
+  ]), [isAdmin]);
 
   useEffect(() => {
     if (!auth?.token) return;
@@ -268,28 +294,38 @@ function App() {
 
   const load = async () => {
     if (!auth?.token) return;
+    setLoading(true);
     const saleQuery = `?from=${dateRange.from}&to=${dateRange.to}`;
-    const [productRows, saleRows, dashboardRow, profitRow, employeeRows, backupRows, auditRows] = await Promise.all([
-      api(`/products?q=${encodeURIComponent(query)}`),
-      api(`/sales${saleQuery}`),
-      api("/dashboard"),
-      api("/profit-report"),
-      isAdmin ? api("/users") : Promise.resolve([]),
-      isAdmin ? api("/backups").catch(() => []) : Promise.resolve([]),
-      api("/audit-logs").catch(() => [])
-    ]);
-    setProducts(productRows);
-    setSales(saleRows);
-    setDashboard(dashboardRow);
-    setProfitReport(profitRow);
-    setEmployees(employeeRows);
-    setBackups(backupRows);
-    setAuditLogs(auditRows);
+    try {
+      const [productRows, saleRows, dashboardRow, profitRow, employeeRows, backupRows, auditRows] = await Promise.all([
+        api(`/products?q=${encodeURIComponent(query)}`),
+        api(`/sales${saleQuery}`),
+        api("/dashboard"),
+        api("/profit-report"),
+        isAdmin ? api("/users") : Promise.resolve([]),
+        isAdmin ? api("/backups").catch(() => []) : Promise.resolve([]),
+        api("/audit-logs").catch(() => [])
+      ]);
+      setProducts(productRows);
+      setSales(saleRows);
+      setDashboard(dashboardRow);
+      setProfitReport(profitRow);
+      setEmployees(employeeRows);
+      setBackups(backupRows);
+      setAuditLogs(auditRows);
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
     load().catch((err) => setError(err.message));
   }, [auth, query, dateRange.from, dateRange.to]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setQuery(searchInput), 300);
+    return () => window.clearTimeout(timer);
+  }, [searchInput]);
 
   useEffect(() => {
     if (!saleForm.productId && products[0]) {
@@ -306,6 +342,12 @@ function App() {
   const selectedProduct = useMemo(
     () => products.find((product) => product.id === Number(saleForm.productId)),
     [products, saleForm.productId]
+  );
+  const visibleProducts = useMemo(() => products.slice(0, 80), [products]);
+  const quickSaleProducts = useMemo(() => products.filter((product) => product.stock > 0).slice(0, 12), [products]);
+  const quickSaleTotal = useMemo(
+    () => quickSaleItems.reduce((sum, item) => sum + item.quantity * Number(item.product.price || 0), 0),
+    [quickSaleItems]
   );
 
   useEffect(() => {
@@ -447,6 +489,57 @@ function App() {
         })
       });
       setSaleForm((current) => ({ ...current, quantity: 1 }));
+      setAutoSaveStatus("已自動儲存");
+      await load();
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const addQuickSaleItem = (product) => {
+    setQuickSaleItems((current) => {
+      const existing = current.find((item) => item.product.id === product.id);
+      if (existing) {
+        return current.map((item) =>
+          item.product.id === product.id
+            ? { ...item, quantity: Math.min(item.quantity + 1, product.stock) }
+            : item
+        );
+      }
+      return [...current, { product, quantity: 1 }];
+    });
+  };
+
+  const updateQuickSaleQuantity = (productId, delta) => {
+    setQuickSaleItems((current) =>
+      current
+        .map((item) =>
+          item.product.id === productId
+            ? { ...item, quantity: Math.max(0, Math.min(item.quantity + delta, item.product.stock)) }
+            : item
+        )
+        .filter((item) => item.quantity > 0)
+    );
+  };
+
+  const checkoutQuickSale = async () => {
+    if (quickSaleItems.length === 0) return;
+    setError("");
+    try {
+      for (const item of quickSaleItems) {
+        await api("/sales", {
+          method: "POST",
+          body: JSON.stringify({
+            productId: item.product.id,
+            quantity: item.quantity,
+            saleUnit: item.product.unit,
+            cardsPerUnit: item.product.cardsPerUnit,
+            unitPrice: item.product.price,
+            soldAt: new Date().toISOString().slice(0, 10)
+          })
+        });
+      }
+      setQuickSaleItems([]);
       setAutoSaveStatus("已自動儲存");
       await load();
     } catch (err) {
@@ -660,7 +753,7 @@ function App() {
   if (!auth?.token) return <Login onLogin={setAuth} />;
 
   return (
-    <div className="min-h-screen bg-slate-100 text-slate-900">
+    <div className="min-h-screen overflow-x-hidden bg-slate-100 pb-44 text-slate-900 lg:pb-0">
       <aside className="fixed inset-y-0 left-0 hidden w-64 border-r border-slate-200 bg-white px-5 py-6 lg:block">
         <div className="flex items-center gap-3">
           <div className="grid h-10 w-10 place-items-center rounded-lg bg-teal-700 text-white">
@@ -672,14 +765,7 @@ function App() {
           </div>
         </div>
         <nav className="mt-8 space-y-1 text-sm font-medium text-slate-600">
-          {[
-            [BarChart3, "營業額儀表板"],
-            [TrendingUp, "利潤分析"],
-            [Boxes, "商品庫存"],
-            [ShoppingCart, "銷售管理"],
-            [History, "操作紀錄"],
-            ...(isAdmin ? [[UserRound, "員工管理"], [Database, "系統備份"]] : [])
-          ].map(([Icon, label]) => (
+          {navigationItems.map(([Icon, label]) => (
             <a key={label} href={`#${label}`} className="flex items-center gap-3 rounded-md px-3 py-2 hover:bg-slate-100">
               <Icon className="h-4 w-4" />
               {label}
@@ -688,12 +774,52 @@ function App() {
         </nav>
       </aside>
 
+      {mobileMenuOpen && (
+        <div className="fixed inset-0 z-50 lg:hidden">
+          <button type="button" className="absolute inset-0 bg-slate-950/40" aria-label="關閉選單" onClick={() => setMobileMenuOpen(false)} />
+          <aside className="absolute inset-y-0 left-0 w-[82vw] max-w-xs border-r border-slate-200 bg-white px-5 py-5 shadow-xl">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="grid h-10 w-10 place-items-center rounded-lg bg-teal-700 text-white">
+                  <Warehouse className="h-5 w-5" />
+                </div>
+                <div>
+                  <p className="font-semibold">{APP_NAME}</p>
+                  <p className="text-xs text-slate-500">Trading Card Store</p>
+                </div>
+              </div>
+              <Button type="button" variant="ghost" className="h-12 w-12 px-0" onClick={() => setMobileMenuOpen(false)}>
+                <X className="h-5 w-5" />
+              </Button>
+            </div>
+            <nav className="mt-6 space-y-2 text-base font-medium text-slate-700">
+              {navigationItems.map(([Icon, label]) => (
+                <a
+                  key={label}
+                  href={`#${label}`}
+                  className="flex min-h-12 items-center gap-3 rounded-md px-3 py-3 active:bg-slate-100"
+                  onClick={() => setMobileMenuOpen(false)}
+                >
+                  <Icon className="h-5 w-5" />
+                  {label}
+                </a>
+              ))}
+            </nav>
+          </aside>
+        </div>
+      )}
+
       <main className="lg:pl-64">
-        <header className="border-b border-slate-200 bg-white px-4 py-4 sm:px-6 lg:px-8">
+        <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur sm:px-6 lg:px-8">
           <div className="mx-auto flex max-w-7xl flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <p className="text-sm text-slate-500">{APP_NAME}</p>
-              <h1 className="text-2xl font-semibold text-slate-950">{APP_NAME}</h1>
+            <div className="flex items-center gap-3">
+              <Button type="button" variant="secondary" className="h-12 w-12 px-0 lg:hidden" onClick={() => setMobileMenuOpen(true)}>
+                <Menu className="h-5 w-5" />
+              </Button>
+              <div>
+                <p className="text-sm text-slate-500">{APP_NAME}</p>
+                <h1 className="text-lg font-semibold text-slate-950 sm:text-2xl">{APP_NAME}</h1>
+              </div>
             </div>
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
               <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600">
@@ -716,7 +842,7 @@ function App() {
           </div>
         </header>
 
-        <div className="mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
+        <div className="mx-auto max-w-7xl space-y-6 px-3 py-4 sm:px-6 sm:py-6 lg:px-8">
           {error && (
             <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
               {error}
@@ -724,10 +850,21 @@ function App() {
           )}
 
           <section id="營業額儀表板" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <StatCard icon={CalendarDays} label="今日營業額" value={currency.format(dashboard?.todayRevenue ?? 0)} detail="依銷售日期統計" tone="bg-teal-50 text-teal-700" />
-            <StatCard icon={BarChart3} label="本月營業額" value={currency.format(dashboard?.monthRevenue ?? 0)} detail="當月銷售總額" tone="bg-indigo-50 text-indigo-700" />
-            <StatCard icon={ShoppingCart} label="總銷售量" value={`${number.format(dashboard?.totalSalesQuantity ?? 0)} 單位`} detail="所有銷售紀錄累計" tone="bg-amber-50 text-amber-700" />
-            <StatCard icon={Boxes} label="低庫存商品數" value={number.format(dashboard?.lowStockCount ?? 0)} detail={`庫存總量 ${number.format(dashboard?.totalStock ?? 0)} 單位`} tone="bg-rose-50 text-rose-700" />
+            {loading && !dashboard ? (
+              <>
+                <SkeletonCard />
+                <SkeletonCard />
+                <SkeletonCard />
+                <SkeletonCard />
+              </>
+            ) : (
+              <>
+                <StatCard icon={CalendarDays} label="今日營業額" value={currency.format(dashboard?.todayRevenue ?? 0)} detail="依銷售日期統計" tone="bg-teal-50 text-teal-700" />
+                <StatCard icon={BarChart3} label="本月營業額" value={currency.format(dashboard?.monthRevenue ?? 0)} detail="當月銷售總額" tone="bg-indigo-50 text-indigo-700" />
+                <StatCard icon={ShoppingCart} label="總銷售量" value={`${number.format(dashboard?.totalSalesQuantity ?? 0)} 單位`} detail="所有銷售紀錄累計" tone="bg-amber-50 text-amber-700" />
+                <StatCard icon={Boxes} label="低庫存商品數" value={number.format(dashboard?.lowStockCount ?? 0)} detail={`庫存總量 ${number.format(dashboard?.totalStock ?? 0)} 單位`} tone="bg-rose-50 text-rose-700" />
+              </>
+            )}
           </section>
 
           <section id="利潤分析" className="space-y-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
@@ -737,13 +874,15 @@ function App() {
                 <h2 className="text-lg font-semibold">利潤分析</h2>
               </div>
               {isAdmin && (
-                <div className="flex flex-col gap-2 sm:flex-row">
-                  <Button type="button" onClick={syncGoogleSheet} disabled={syncingSheet}>
+                <div className="flex flex-col gap-3 sm:flex-row sm:gap-2">
+                  <Button type="button" className="w-full sm:w-auto" onClick={syncGoogleSheet} disabled={syncingSheet}>
+                    <Database className="h-4 w-4" />
                     {syncingSheet ? "同步中..." : "同步到 Google 試算表"}
                   </Button>
                   <Button
                     type="button"
                     variant="secondary"
+                    className="w-full sm:w-auto"
                     disabled={!profitReport?.googleSheetUrl}
                     onClick={() => window.open(profitReport.googleSheetUrl, "_blank", "noopener,noreferrer")}
                   >
@@ -849,17 +988,17 @@ function App() {
                   <Boxes className="h-5 w-5 text-slate-700" />
                   <h2 className="text-lg font-semibold">商品庫存管理</h2>
                 </div>
-                <div className="relative w-full sm:w-80">
+                <div className="sticky top-[92px] z-20 w-full bg-white py-1 sm:static sm:w-80 sm:bg-transparent sm:py-0">
                   <Search className="pointer-events-none absolute left-3 top-2.5 h-5 w-5 text-slate-400" />
                   <input
-                    value={query}
-                    onChange={(event) => setQuery(event.target.value)}
-                    placeholder="搜尋商品、系列、稀有度、卡況、單位"
-                    className="h-10 w-full rounded-md border border-slate-300 bg-white pl-10 pr-3 text-sm outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-100"
+                    value={searchInput}
+                    onChange={(event) => setSearchInput(event.target.value)}
+                    placeholder="搜尋商品、系列、稀有度、編號"
+                    className="h-12 w-full rounded-md border border-slate-300 bg-white pl-10 pr-3 text-base outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-100 sm:h-10 sm:text-sm"
                   />
                 </div>
               </div>
-              <div className="overflow-x-auto">
+              <div className="hidden overflow-x-auto lg:block">
                 <table className="w-full min-w-[1080px] text-left text-sm">
                   <thead className="border-b border-slate-200 text-xs text-slate-500">
                     <tr>
@@ -876,7 +1015,7 @@ function App() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {products.map((product) => (
+                    {visibleProducts.map((product) => (
                       <tr key={product.id}>
                         <td className="py-3 pr-4 font-medium">{product.name}<p className="text-xs text-slate-500">{product.notes}</p></td>
                         <td className="py-3 pr-4">{product.series}</td>
@@ -905,6 +1044,37 @@ function App() {
                     ))}
                   </tbody>
                 </table>
+              </div>
+              <div className="grid gap-3 lg:hidden">
+                {visibleProducts.map((product) => (
+                  <article key={product.id} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <h3 className="truncate font-semibold text-slate-950">{product.name}</h3>
+                        <p className="mt-1 text-sm text-slate-500">{product.series} · {product.rarity} · {product.condition}</p>
+                        <p className="mt-1 text-sm text-slate-500">{product.packageSpec}</p>
+                      </div>
+                      <span className={`shrink-0 rounded px-2 py-1 text-xs font-medium ${product.stock <= product.lowStockThreshold ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-700"}`}>
+                        {formatStock(product)}
+                      </span>
+                    </div>
+                    <div className="mt-3 flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-xs text-slate-500">售價</p>
+                        <p className="font-semibold">{currency.format(product.price)}</p>
+                      </div>
+                      <div className="flex gap-2">
+                        <Button type="button" variant="secondary" onClick={() => addQuickSaleItem(product)}>
+                          <Plus className="h-4 w-4" />
+                          銷售
+                        </Button>
+                        <Button variant="secondary" disabled={!isAdmin} onClick={() => editProduct(product)} title="編輯">
+                          <Edit3 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  </article>
+                ))}
               </div>
             </div>
 
@@ -941,8 +1111,11 @@ function App() {
                   <TextInput disabled={!isAdmin} required min="0" type="number" placeholder="低庫存門檻" value={productForm.lowStockThreshold} onChange={(e) => setProductForm({ ...productForm, lowStockThreshold: e.target.value })} />
                 </div>
                 <TextArea disabled={!isAdmin} placeholder="備註" value={productForm.notes} onChange={(e) => setProductForm({ ...productForm, notes: e.target.value })} />
-                <div className="flex gap-2">
-                  <Button disabled={!isAdmin} type="submit">{editingId ? "儲存變更" : "建立商品"}</Button>
+                <div className="flex flex-col gap-3 sm:flex-row sm:gap-2">
+                  <Button disabled={!isAdmin} type="submit" className="w-full sm:w-auto">
+                    <PackagePlus className="h-4 w-4" />
+                    {editingId ? "儲存變更" : "建立商品"}
+                  </Button>
                   {editingId && <Button variant="secondary" type="button" onClick={() => { setEditingId(null); setProductForm(emptyProduct); }}>取消</Button>}
                 </div>
               </div>
@@ -962,10 +1135,54 @@ function App() {
               />
               <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <p className="text-sm text-slate-500">支援 Excel 匯出的 CSV。未填稀有度/卡況時會自動補預設值。</p>
-                <Button type="button" onClick={importProducts}>匯入商品</Button>
+                <Button type="button" className="w-full sm:w-auto" onClick={importProducts}>
+                  <PackagePlus className="h-4 w-4" />
+                  匯入商品
+                </Button>
               </div>
             </section>
           )}
+
+          <section className="hidden rounded-lg border border-slate-200 bg-white p-4 shadow-sm lg:block">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <ShoppingCart className="h-5 w-5 text-slate-700" />
+                <h2 className="text-lg font-semibold">快速銷售面板</h2>
+              </div>
+              <p className="font-semibold">{currency.format(quickSaleTotal)}</p>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              {quickSaleProducts.map((product) => (
+                <button
+                  key={product.id}
+                  type="button"
+                  className="rounded-lg border border-slate-200 p-3 text-left shadow-sm transition hover:border-teal-300 hover:bg-teal-50 active:scale-[0.99]"
+                  onClick={() => addQuickSaleItem(product)}
+                >
+                  <p className="font-medium">{product.name}</p>
+                  <p className="mt-1 text-sm text-slate-500">{formatStock(product)} · {currency.format(product.price)}</p>
+                </button>
+              ))}
+            </div>
+            {quickSaleItems.length > 0 && (
+              <div className="mt-4 grid gap-2">
+                {quickSaleItems.map((item) => (
+                  <div key={item.product.id} className="flex items-center justify-between rounded-md bg-slate-50 px-3 py-2">
+                    <span>{item.product.name}</span>
+                    <div className="flex items-center gap-2">
+                      <Button type="button" variant="secondary" className="h-10 w-10 px-0" onClick={() => updateQuickSaleQuantity(item.product.id, -1)}><Minus className="h-4 w-4" /></Button>
+                      <span className="w-8 text-center">{item.quantity}</span>
+                      <Button type="button" variant="secondary" className="h-10 w-10 px-0" onClick={() => updateQuickSaleQuantity(item.product.id, 1)}><Plus className="h-4 w-4" /></Button>
+                    </div>
+                  </div>
+                ))}
+                <Button type="button" onClick={checkoutQuickSale}>
+                  <ShoppingCart className="h-4 w-4" />
+                  快速結帳
+                </Button>
+              </div>
+            )}
+          </section>
 
           <section id="銷售管理" className="grid gap-6 xl:grid-cols-[0.75fr_1.25fr]">
             <form onSubmit={submitSale} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
@@ -999,7 +1216,10 @@ function App() {
                 </div>
                 <TextInput required type="date" value={saleForm.soldAt} onChange={(e) => setSaleForm({ ...saleForm, soldAt: e.target.value })} />
                 <p className="text-sm text-slate-500">總金額：{currency.format(Number(saleForm.quantity || 0) * Number(saleForm.unitPrice || 0))}，銷售 {number.format(Number(saleForm.quantity || 0))} {saleForm.saleUnit}</p>
-                <Button type="submit">新增銷售並扣庫存</Button>
+                <Button type="submit" className="w-full">
+                  <ShoppingCart className="h-4 w-4" />
+                  新增銷售並扣庫存
+                </Button>
               </div>
             </form>
 
@@ -1014,7 +1234,7 @@ function App() {
                   <TextInput type="date" value={dateRange.to} onChange={(e) => setDateRange({ ...dateRange, to: e.target.value })} />
                 </div>
               </div>
-              <div className="overflow-x-auto">
+              <div className="hidden overflow-x-auto lg:block">
                 <table className="w-full min-w-[860px] text-left text-sm">
                   <thead className="border-b border-slate-200 text-xs text-slate-500">
                     <tr>
@@ -1048,6 +1268,25 @@ function App() {
                   </tbody>
                 </table>
               </div>
+              <div className="grid gap-3 lg:hidden">
+                {sales.map((sale) => (
+                  <article key={sale.id} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="font-semibold">{sale.productName}</p>
+                        <p className="text-sm text-slate-500">{sale.productSeries} · {sale.soldAt}</p>
+                      </div>
+                      <p className="font-semibold">{currency.format(sale.total)}</p>
+                    </div>
+                    <div className="mt-3 flex items-center justify-between">
+                      <p className="text-sm text-slate-600">{sale.quantity} {sale.saleUnit} · {currency.format(sale.unitPrice)}</p>
+                      <Button variant="danger" disabled={!isAdmin} onClick={() => deleteSale(sale)}>
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </article>
+                ))}
+              </div>
             </div>
           </section>
 
@@ -1056,7 +1295,7 @@ function App() {
               <History className="h-5 w-5 text-slate-700" />
               <h2 className="text-lg font-semibold">操作紀錄</h2>
             </div>
-            <div className="overflow-x-auto">
+            <div className="hidden overflow-x-auto lg:block">
               <table className="w-full min-w-[920px] text-left text-sm">
                 <thead className="border-b border-slate-200 text-xs text-slate-500">
                   <tr>
@@ -1094,6 +1333,27 @@ function App() {
                   )}
                 </tbody>
               </table>
+            </div>
+            <div className="grid gap-3 lg:hidden">
+              {auditLogs.map((log) => {
+                const beforeName = log.beforeData?.name || log.beforeData?.sale?.id || log.beforeData?.username || log.beforeData?.product?.name;
+                const afterName = log.afterData?.name || log.afterData?.sale?.id || log.afterData?.username || log.afterData?.product?.name;
+                return (
+                  <article key={log.id} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="font-semibold">{actionLabels[log.actionType] ?? log.actionType} {entityLabels[log.entityType] ?? log.entityType}</p>
+                        <p className="mt-1 text-sm text-slate-500">{log.username} · {new Date(log.createdAt).toLocaleString("zh-TW")}</p>
+                      </div>
+                      <span className={`rounded px-2 py-1 text-xs font-medium ${log.undoneAt ? "bg-slate-100 text-slate-600" : "bg-emerald-50 text-emerald-700"}`}>
+                        {log.undoneAt ? "已還原" : "可還原"}
+                      </span>
+                    </div>
+                    <p className="mt-2 text-sm text-slate-600">{beforeName || afterName || `#${log.id}`}</p>
+                  </article>
+                );
+              })}
+              {auditLogs.length === 0 && <p className="py-6 text-center text-slate-500">尚無操作紀錄</p>}
             </div>
           </section>
 
@@ -1154,7 +1414,7 @@ function App() {
                   <UserRound className="h-5 w-5 text-slate-700" />
                   <h2 className="text-lg font-semibold">所有員工</h2>
                 </div>
-                <div className="overflow-x-auto">
+                <div className="hidden overflow-x-auto lg:block">
                   <table className="w-full min-w-[980px] text-left text-sm">
                     <thead className="border-b border-slate-200 text-xs text-slate-500">
                       <tr>
@@ -1260,6 +1520,32 @@ function App() {
                     </tbody>
                   </table>
                 </div>
+                <div className="grid gap-3 lg:hidden">
+                  {employees.map((employee) => (
+                    <article key={employee.id} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="font-semibold">{employee.displayName || employee.name}</p>
+                          <p className="mt-1 text-sm text-slate-500">{employee.username} · {employee.role}</p>
+                        </div>
+                        <span className={`rounded px-2 py-1 text-xs font-medium ${employee.isActive ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}>
+                          {employee.isActive ? "啟用" : "停用"}
+                        </span>
+                      </div>
+                      <div className="mt-3 grid grid-cols-3 gap-2">
+                        <Button type="button" variant="secondary" onClick={() => editEmployee(employee)}>
+                          <Edit3 className="h-4 w-4" />
+                        </Button>
+                        <Button type="button" variant="secondary" onClick={() => toggleEmployeeStatus(employee)}>
+                          {employee.isActive ? "停用" : "啟用"}
+                        </Button>
+                        <Button type="button" variant="danger" disabled={employee.id === auth.user.id} onClick={() => deleteEmployee(employee)}>
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </article>
+                  ))}
+                </div>
               </div>
             </section>
           )}
@@ -1281,7 +1567,7 @@ function App() {
                 還原會覆蓋目前 PostgreSQL 資料庫中的員工、商品與銷售資料。備份檔只可透過管理員 API 操作，不提供公開下載。
               </div>
 
-              <div className="overflow-x-auto">
+              <div className="hidden overflow-x-auto lg:block">
                 <table className="w-full min-w-[860px] text-left text-sm">
                   <thead className="border-b border-slate-200 text-xs text-slate-500">
                     <tr>
@@ -1325,10 +1611,77 @@ function App() {
                   </tbody>
                 </table>
               </div>
+              <div className="grid gap-3 lg:hidden">
+                {backups.map((backup) => (
+                  <article key={backup.filename} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate font-mono text-xs">{backup.filename}</p>
+                        <p className="mt-1 text-sm text-slate-500">{new Date(backup.createdAt).toLocaleString("zh-TW")} · {formatBytes(backup.size)}</p>
+                      </div>
+                      <span className={`rounded px-2 py-1 text-xs font-medium ${backup.type === "auto" ? "bg-indigo-50 text-indigo-700" : "bg-teal-50 text-teal-700"}`}>
+                        {backup.type}
+                      </span>
+                    </div>
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                      <Button type="button" variant="secondary" onClick={() => restoreBackup(backup)}>
+                        <RotateCcw className="h-4 w-4" />
+                        還原
+                      </Button>
+                      <Button type="button" variant="danger" onClick={() => deleteBackup(backup)}>
+                        <Trash2 className="h-4 w-4" />
+                        刪除
+                      </Button>
+                    </div>
+                  </article>
+                ))}
+                {backups.length === 0 && <p className="py-6 text-center text-slate-500">尚無備份紀錄</p>}
+              </div>
             </section>
           )}
         </div>
       </main>
+
+      <section className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white p-3 shadow-[0_-12px_30px_rgba(15,23,42,0.12)] lg:hidden">
+        <div className="mb-2 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <ShoppingCart className="h-5 w-5 text-teal-700" />
+            <h2 className="font-semibold">快速銷售</h2>
+          </div>
+          <p className="font-semibold">{currency.format(quickSaleTotal)}</p>
+        </div>
+        <div className="mb-2 flex gap-2 overflow-x-auto pb-1">
+          {quickSaleProducts.map((product) => (
+            <button
+              key={product.id}
+              type="button"
+              className="min-w-40 rounded-lg border border-slate-200 bg-slate-50 p-3 text-left active:bg-teal-50"
+              onClick={() => addQuickSaleItem(product)}
+            >
+              <p className="truncate text-sm font-medium">{product.name}</p>
+              <p className="mt-1 text-xs text-slate-500">{currency.format(product.price)} · {formatStock(product)}</p>
+            </button>
+          ))}
+        </div>
+        {quickSaleItems.length > 0 && (
+          <div className="mb-2 max-h-28 space-y-2 overflow-y-auto">
+            {quickSaleItems.map((item) => (
+              <div key={item.product.id} className="flex items-center justify-between gap-2 rounded-md bg-slate-50 px-2 py-2">
+                <p className="min-w-0 truncate text-sm">{item.product.name}</p>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Button type="button" variant="secondary" className="h-10 w-10 px-0" onClick={() => updateQuickSaleQuantity(item.product.id, -1)}><Minus className="h-4 w-4" /></Button>
+                  <span className="w-6 text-center text-sm">{item.quantity}</span>
+                  <Button type="button" variant="secondary" className="h-10 w-10 px-0" onClick={() => updateQuickSaleQuantity(item.product.id, 1)}><Plus className="h-4 w-4" /></Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        <Button type="button" className="w-full" disabled={quickSaleItems.length === 0} onClick={checkoutQuickSale}>
+          <ShoppingCart className="h-4 w-4" />
+          快速結帳
+        </Button>
+      </section>
     </div>
   );
 }

@@ -10,10 +10,16 @@ body {
   margin: 0;
   min-width: 320px;
   background: #f6f7f9;
+  -webkit-text-size-adjust: 100%;
+  touch-action: manipulation;
 }
 
 button,
 input,
 select {
   font: inherit;
+}
+
+html {
+  scroll-behavior: smooth;
 }
