@@ -46,6 +46,11 @@ function authFromStorage() {
 const API_BASE_URL = (import.meta.env.VITE_API_URL ?? "").replace(/\/$/, "");
 const APP_NAME = "Coolcard Tokyo TCG ERP";
 const UNIT_OPTIONS = ["單張", "包", "盒", "箱", "組", "其他"];
+const PRODUCT_TYPE_OPTIONS = [
+  { value: "normal", label: "一般商品" },
+  { value: "graded", label: "PSA商品" }
+];
+const GRADING_COMPANIES = ["PSA", "BGS", "CGC"];
 const PRODUCT_PAGE_SIZE = 20;
 const INVENTORY_LOG_TYPE_OPTIONS = [
   { value: "全部", label: "全部異動類型" },
@@ -147,6 +152,18 @@ async function fetchWithWake(path, options = {}) {
 
 function formatStock(product) {
   return `${number.format(product.stock ?? 0)} ${product.unit ?? "單張"}`;
+}
+
+function productTypeLabel(productType) {
+  return PRODUCT_TYPE_OPTIONS.find((option) => option.value === productType)?.label ?? "一般商品";
+}
+
+function productTypeTone(productType) {
+  return productType === "graded" ? "bg-indigo-50 text-indigo-700" : "bg-slate-100 text-slate-700";
+}
+
+function productBadgeLabel(product) {
+  return product.productType === "graded" ? (product.grade ?? "-") : "-";
 }
 
 function normalizeInventoryLogType(type) {
@@ -299,6 +316,10 @@ const emptyProduct = {
   series: "",
   rarity: "RR",
   condition: "近全新",
+  productType: "normal",
+  gradingCompany: "PSA",
+  grade: "",
+  certNumber: "",
   unit: "單張",
   cardsPerUnit: "1",
   packageSpec: "單張卡",
@@ -412,6 +433,9 @@ function App() {
   const [autoSaveStatus, setAutoSaveStatus] = useState("");
   const [undoing, setUndoing] = useState(false);
   const [searchInput, setSearchInput] = useState("");
+  const [productTypeFilter, setProductTypeFilter] = useState("全部");
+  const [gradeSearch, setGradeSearch] = useState("");
+  const [certSearch, setCertSearch] = useState("");
   const [unitFilter, setUnitFilter] = useState("全部");
   const [stockSort, setStockSort] = useState("asc");
   const [productPage, setProductPage] = useState(1);
@@ -572,16 +596,21 @@ function App() {
   const productUnitOptions = useMemo(() => ["全部", ...Array.from(new Set(products.map((product) => product.unit).filter(Boolean)))], [products]);
   const filteredProducts = useMemo(() => {
     const keyword = searchInput.trim().toLowerCase();
+    const gradeKeyword = gradeSearch.trim().toLowerCase();
+    const certKeyword = certSearch.trim().toLowerCase();
     return products
       .filter((product) => {
         const matchesKeyword = !keyword ||
           String(product.name ?? "").toLowerCase().includes(keyword) ||
           String(product.series ?? "").toLowerCase().includes(keyword);
+        const matchesType = productTypeFilter === "全部" || product.productType === productTypeFilter;
+        const matchesGrade = !gradeKeyword || String(product.grade ?? "").toLowerCase().includes(gradeKeyword);
+        const matchesCert = !certKeyword || String(product.certNumber ?? "").toLowerCase().includes(certKeyword);
         const matchesUnit = unitFilter === "全部" || product.unit === unitFilter;
-        return matchesKeyword && matchesUnit;
+        return matchesKeyword && matchesType && matchesGrade && matchesCert && matchesUnit;
       })
       .sort((a, b) => stockSort === "asc" ? a.stock - b.stock : b.stock - a.stock);
-  }, [products, searchInput, unitFilter, stockSort]);
+  }, [products, searchInput, productTypeFilter, gradeSearch, certSearch, unitFilter, stockSort]);
   const productPageCount = Math.max(1, Math.ceil(filteredProducts.length / PRODUCT_PAGE_SIZE));
   const currentProductPage = Math.min(productPage, productPageCount);
   const visibleProducts = useMemo(() => {
@@ -624,7 +653,7 @@ function App() {
 
   useEffect(() => {
     setProductPage(1);
-  }, [searchInput, unitFilter, stockSort]);
+  }, [searchInput, productTypeFilter, gradeSearch, certSearch, unitFilter, stockSort]);
 
   useEffect(() => {
     if (productPage > productPageCount) setProductPage(productPageCount);
@@ -700,11 +729,11 @@ function App() {
   const submitProduct = async (event) => {
     event.preventDefault();
     setError("");
-    const payload = {
-      ...productForm,
-      cardsPerUnit: Number(productForm.cardsPerUnit),
-      cost: Number(productForm.cost),
-      price: Number(productForm.price),
+      const payload = {
+        ...productForm,
+        cardsPerUnit: Number(productForm.cardsPerUnit),
+        cost: Number(productForm.cost),
+        price: Number(productForm.price),
       stock: Number(productForm.stock),
       lowStockThreshold: Number(productForm.lowStockThreshold)
     };
@@ -731,6 +760,10 @@ function App() {
       series: product.series,
       rarity: product.rarity,
       condition: product.condition,
+      productType: product.productType ?? "normal",
+      gradingCompany: product.gradingCompany ?? "PSA",
+      grade: product.grade ?? "",
+      certNumber: product.certNumber ?? "",
       unit: product.unit,
       cardsPerUnit: String(product.cardsPerUnit),
       packageSpec: product.packageSpec,
@@ -1438,6 +1471,25 @@ function App() {
                   <section>
                     <h4 className="mb-3 text-sm font-semibold text-slate-700">基本資訊</h4>
                     <div className="grid gap-3 sm:grid-cols-2 sm:[grid-template-columns:repeat(2,minmax(0,1fr))]">
+                      <label className="grid gap-1 text-sm font-medium text-slate-600 sm:col-span-2">
+                        商品類型
+                        <SelectInput
+                          disabled={!isAdmin}
+                          value={productForm.productType}
+                          onChange={(e) => setProductForm((current) => {
+                            const nextType = e.target.value;
+                            return {
+                              ...current,
+                              productType: nextType,
+                              gradingCompany: nextType === "graded" ? (current.gradingCompany || "PSA") : "PSA",
+                              grade: nextType === "graded" ? current.grade : "",
+                              certNumber: nextType === "graded" ? current.certNumber : ""
+                            };
+                          })}
+                        >
+                          {PRODUCT_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                        </SelectInput>
+                      </label>
                       <label className="grid gap-1 text-sm font-medium text-slate-600">
                         商品名稱
                         <TextInput disabled={!isAdmin} required value={productForm.name} onChange={(e) => setProductForm({ ...productForm, name: e.target.value })} />
@@ -1458,6 +1510,40 @@ function App() {
                           {["全新", "近全新", "良好", "輕微白邊", "明顯傷痕"].map((condition) => <option key={condition}>{condition}</option>)}
                         </SelectInput>
                       </label>
+                      {productForm.productType === "graded" && (
+                        <>
+                          <label className="grid gap-1 text-sm font-medium text-slate-600">
+                            鑑定公司
+                            <SelectInput
+                              disabled={!isAdmin}
+                              value={productForm.gradingCompany}
+                              onChange={(e) => setProductForm({ ...productForm, gradingCompany: e.target.value })}
+                            >
+                              {GRADING_COMPANIES.map((company) => <option key={company}>{company}</option>)}
+                            </SelectInput>
+                          </label>
+                          <label className="grid gap-1 text-sm font-medium text-slate-600">
+                            Grade
+                            <TextInput
+                              disabled={!isAdmin}
+                              required
+                              placeholder="例如 PSA10"
+                              value={productForm.grade}
+                              onChange={(e) => setProductForm({ ...productForm, grade: e.target.value })}
+                            />
+                          </label>
+                          <label className="grid gap-1 text-sm font-medium text-slate-600 sm:col-span-2">
+                            鑑定編號
+                            <TextInput
+                              disabled={!isAdmin}
+                              required
+                              placeholder="cert number"
+                              value={productForm.certNumber}
+                              onChange={(e) => setProductForm({ ...productForm, certNumber: e.target.value })}
+                            />
+                          </label>
+                        </>
+                      )}
                     </div>
                   </section>
 
@@ -1521,7 +1607,7 @@ function App() {
                     <p className="mt-1 text-sm text-slate-500">共 {number.format(filteredProducts.length)} 筆，顯示第 {number.format(currentProductPage)} / {number.format(productPageCount)} 頁</p>
                   </div>
                 </div>
-                <div className="mb-4 grid gap-3 lg:grid-cols-[minmax(220px,1fr)_180px_180px]">
+                <div className="mb-4 grid gap-3 lg:grid-cols-[minmax(220px,1fr)_180px_180px_180px]">
                   <div className="relative min-w-0">
                     <Search className="pointer-events-none absolute left-3 top-2.5 h-5 w-5 text-slate-400" />
                     <input
@@ -1531,6 +1617,22 @@ function App() {
                       className="h-12 w-full rounded-md border border-slate-300 bg-white pl-10 pr-3 text-base outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-100 sm:h-10 sm:text-sm"
                     />
                   </div>
+                  <SelectInput value={productTypeFilter} onChange={(event) => setProductTypeFilter(event.target.value)}>
+                    <option value="全部">全部類型</option>
+                    {PRODUCT_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  </SelectInput>
+                  <TextInput
+                    value={gradeSearch}
+                    onChange={(event) => setGradeSearch(event.target.value)}
+                    placeholder="搜尋 Grade"
+                  />
+                  <TextInput
+                    value={certSearch}
+                    onChange={(event) => setCertSearch(event.target.value)}
+                    placeholder="搜尋 cert number"
+                  />
+                </div>
+                <div className="mb-4 grid gap-3 lg:grid-cols-[180px_180px]">
                   <SelectInput value={unitFilter} onChange={(event) => setUnitFilter(event.target.value)}>
                     {productUnitOptions.map((unit) => <option key={unit} value={unit}>{unit === "全部" ? "全部單位" : unit}</option>)}
                   </SelectInput>
@@ -1545,6 +1647,8 @@ function App() {
                     <thead className="border-b border-slate-200 text-xs text-slate-500">
                       <tr>
                         <th className="py-3 pr-4">商品名稱</th>
+                        <th className="py-3 pr-4">商品類型</th>
+                        <th className="py-3 pr-4">Grade</th>
                         <th className="py-3 pr-4">系列</th>
                         <th className="py-3 pr-4">稀有度</th>
                         <th className="py-3 pr-4">卡況</th>
@@ -1559,7 +1663,23 @@ function App() {
                     <tbody className="divide-y divide-slate-100">
                       {visibleProducts.map((product) => (
                         <tr key={product.id}>
-                          <td className="py-3 pr-4 font-medium">{product.name}<p className="text-xs text-slate-500">{product.notes}</p></td>
+                          <td className="py-3 pr-4 font-medium">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span>{product.name}</span>
+                              {product.productType === "graded" && (
+                                <span className="rounded bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700">
+                                  {productBadgeLabel(product)}
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-xs text-slate-500">{product.notes}</p>
+                          </td>
+                          <td className="py-3 pr-4">
+                            <span className={`rounded px-2 py-1 text-xs font-medium ${productTypeTone(product.productType)}`}>
+                              {productTypeLabel(product.productType)}
+                            </span>
+                          </td>
+                          <td className="py-3 pr-4 font-medium text-slate-900">{product.productType === "graded" ? product.grade : "-"}</td>
                           <td className="py-3 pr-4">{product.series}</td>
                           <td className="py-3 pr-4">{product.rarity}</td>
                           <td className="py-3 pr-4">{product.condition}</td>
@@ -1586,7 +1706,7 @@ function App() {
                       ))}
                       {visibleProducts.length === 0 && (
                         <tr>
-                          <td className="py-6 text-center text-slate-500" colSpan="10">沒有符合條件的商品</td>
+                          <td className="py-6 text-center text-slate-500" colSpan="12">沒有符合條件的商品</td>
                         </tr>
                       )}
                     </tbody>
@@ -1598,9 +1718,18 @@ function App() {
                     <article key={product.id} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
-                          <h3 className="truncate font-semibold text-slate-950">{product.name}</h3>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h3 className="truncate font-semibold text-slate-950">{product.name}</h3>
+                            {product.productType === "graded" && (
+                              <span className="rounded bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700">
+                                {productBadgeLabel(product)}
+                              </span>
+                            )}
+                          </div>
+                          <p className="mt-1 text-sm text-slate-500">{productTypeLabel(product.productType)}</p>
                           <p className="mt-1 text-sm text-slate-500">{product.series} · {product.rarity} · {product.condition}</p>
                           <p className="mt-1 text-sm text-slate-500">{product.packageSpec}</p>
+                          {product.productType === "graded" && <p className="mt-1 text-sm text-slate-500">{product.gradingCompany} · {product.certNumber}</p>}
                         </div>
                         <span className={`shrink-0 rounded px-2 py-1 text-xs font-medium ${product.stock <= product.lowStockThreshold ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-700"}`}>
                           {formatStock(product)}

@@ -14,6 +14,8 @@ const app = express();
 const port = process.env.PORT ?? 4000;
 const jwtSecret = process.env.JWT_SECRET ?? "local-development-secret-change-me";
 const allowedUnits = new Set(["單張", "包", "盒", "箱", "組", "其他"]);
+const productTypes = new Set(["normal", "graded"]);
+const gradingCompanies = new Set(["PSA", "BGS", "CGC"]);
 const paymentStatuses = new Set(["未付款", "已付款", "部分付款"]);
 const reportSheetTabs = ["今日營收", "庫存總表", "熱銷排行"];
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -77,11 +79,19 @@ function requireAdmin(request, response, next) {
 }
 
 function productPayload(body) {
+  const productType = productTypes.has(String(body.productType ?? "").trim()) ? String(body.productType).trim() : "normal";
+  const gradingCompany = String(body.gradingCompany ?? "").trim().toUpperCase();
+  const grade = String(body.grade ?? "").trim();
+  const certNumber = String(body.certNumber ?? "").trim();
   return {
     name: String(body.name ?? "").trim(),
     series: String(body.series ?? "").trim(),
     rarity: String(body.rarity ?? "").trim(),
     condition: String(body.condition ?? "").trim(),
+    productType,
+    gradingCompany: productType === "graded" && gradingCompanies.has(gradingCompany) ? gradingCompany : null,
+    grade: productType === "graded" && grade ? grade : null,
+    certNumber: productType === "graded" && certNumber ? certNumber : null,
     unit: allowedUnits.has(String(body.unit ?? "").trim()) ? String(body.unit).trim() : "其他",
     cardsPerUnit: Number(body.cardsPerUnit),
     packageSpec: String(body.packageSpec ?? "").trim(),
@@ -96,12 +106,18 @@ function productPayload(body) {
 function validateProduct(product) {
   if (!product.name || !product.series || !product.rarity || !product.condition) return false;
   if (!product.unit || !product.packageSpec) return false;
-  return [product.cardsPerUnit, product.cost, product.price, product.stock, product.lowStockThreshold].every(Number.isFinite) &&
+  const baseValid = [product.cardsPerUnit, product.cost, product.price, product.stock, product.lowStockThreshold].every(Number.isFinite) &&
     product.cardsPerUnit > 0 &&
     product.cost >= 0 &&
     product.price >= 0 &&
     product.stock >= 0 &&
     product.lowStockThreshold >= 0;
+  if (!baseValid) return false;
+  if (!productTypes.has(product.productType)) return false;
+  if (product.productType === "normal") {
+    return product.gradingCompany === null && product.grade === null && product.certNumber === null;
+  }
+  return Boolean(product.gradingCompany && gradingCompanies.has(product.gradingCompany) && product.grade && product.certNumber);
 }
 
 function purchasePayload(body) {
@@ -461,7 +477,7 @@ async function createDatabaseBackup(type = "manual") {
     `, [backupTables]),
     query("SELECT id, username, password_hash, name, display_name, role, is_active, created_at, updated_at FROM users ORDER BY id"),
     query(`
-      SELECT id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost::text, average_cost::text, price::text, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at
+      SELECT id, name, series, rarity, condition, product_type, grading_company, grade, cert_number, unit, cards_per_unit, package_spec, cost::text, average_cost::text, price::text, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at
       FROM products
       ORDER BY id
     `),
@@ -601,8 +617,8 @@ async function restoreDatabaseBackup(filename) {
       await client.query(
         `
           INSERT INTO products
-            (id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost, average_cost, price, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::numeric, $10::numeric, $11::numeric, $12, $13, $14, $15::timestamptz, $16, COALESCE($17::timestamptz, NOW()), COALESCE($18::timestamptz, NOW()))
+            (id, name, series, rarity, condition, product_type, grading_company, grade, cert_number, unit, cards_per_unit, package_spec, cost, average_cost, price, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::numeric, $14::numeric, $15::numeric, $16, $17, $18, $19::timestamptz, $20, COALESCE($21::timestamptz, NOW()), COALESCE($22::timestamptz, NOW()))
         `,
         [
           product.id,
@@ -610,6 +626,10 @@ async function restoreDatabaseBackup(filename) {
           product.series,
           product.rarity,
           product.condition,
+          product.product_type ?? product.productType ?? "normal",
+          product.grading_company ?? product.gradingCompany ?? null,
+          product.grade ?? null,
+          product.cert_number ?? product.certNumber ?? null,
           product.unit ?? "單張",
           product.cards_per_unit ?? 1,
           product.package_spec ?? "單張卡",
@@ -839,7 +859,7 @@ async function writeInventoryLog(client, request, productId, actionType, quantit
 async function productById(client, id) {
   const { rows } = await client.query(
     `
-      SELECT id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost::text, average_cost::text, price::text, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at
+      SELECT id, name, series, rarity, condition, product_type, grading_company, grade, cert_number, unit, cards_per_unit, package_spec, cost::text, average_cost::text, price::text, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at
       FROM products
       WHERE id = $1
     `,
@@ -902,13 +922,17 @@ async function restoreProductSnapshot(client, product) {
   await client.query(
     `
       INSERT INTO products
-        (id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost, average_cost, price, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::numeric, $10::numeric, $11::numeric, $12, $13, $14, $15::timestamptz, $16, COALESCE($17::timestamptz, NOW()), COALESCE($18::timestamptz, NOW()))
+        (id, name, series, rarity, condition, product_type, grading_company, grade, cert_number, unit, cards_per_unit, package_spec, cost, average_cost, price, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::numeric, $14::numeric, $15::numeric, $16, $17, $18, $19::timestamptz, $20, COALESCE($21::timestamptz, NOW()), COALESCE($22::timestamptz, NOW()))
       ON CONFLICT (id) DO UPDATE SET
         name = EXCLUDED.name,
         series = EXCLUDED.series,
         rarity = EXCLUDED.rarity,
         condition = EXCLUDED.condition,
+        product_type = EXCLUDED.product_type,
+        grading_company = EXCLUDED.grading_company,
+        grade = EXCLUDED.grade,
+        cert_number = EXCLUDED.cert_number,
         unit = EXCLUDED.unit,
         cards_per_unit = EXCLUDED.cards_per_unit,
         package_spec = EXCLUDED.package_spec,
@@ -928,6 +952,10 @@ async function restoreProductSnapshot(client, product) {
       product.series,
       product.rarity,
       product.condition,
+      product.product_type ?? product.productType ?? "normal",
+      product.grading_company ?? product.gradingCompany ?? null,
+      product.grade ?? null,
+      product.cert_number ?? product.certNumber ?? null,
       product.unit ?? "單張",
       product.cards_per_unit ?? 1,
       product.package_spec ?? "單張卡",
@@ -1225,11 +1253,12 @@ app.get("/api/products", currentUser, async (request, response, next) => {
   try {
     const { rows } = await query(
       `
-        SELECT id, name, series, rarity, condition, unit, cards_per_unit, package_spec,
+        SELECT id, name, series, rarity, condition, product_type, grading_company, grade, cert_number, unit, cards_per_unit, package_spec,
                cost::float AS cost, price::float AS price, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at
         FROM products
         WHERE deleted_at IS NULL
           AND (name ILIKE $1 OR series ILIKE $1 OR rarity ILIKE $1 OR condition ILIKE $1
+           OR product_type ILIKE $1 OR grading_company ILIKE $1 OR grade ILIKE $1 OR cert_number ILIKE $1
            OR unit ILIKE $1 OR package_spec ILIKE $1 OR notes ILIKE $1)
         ORDER BY updated_at DESC, id DESC
       `,
@@ -1245,7 +1274,8 @@ app.get("/api/products/deleted", currentUser, requireAdmin, async (_request, res
   try {
     const { rows } = await query(
       `
-        SELECT products.id, products.name, products.series, products.rarity, products.condition, products.unit,
+        SELECT products.id, products.name, products.series, products.rarity, products.condition, products.product_type,
+               products.grading_company, products.grade, products.cert_number, products.unit,
                products.cards_per_unit, products.package_spec, products.cost::float AS cost, products.price::float AS price,
                products.stock, products.low_stock_threshold, products.notes, products.deleted_at, products.deleted_by,
                products.created_at, products.updated_at, users.name AS deleted_by_name
@@ -1271,15 +1301,19 @@ app.post("/api/products", currentUser, requireAdmin, async (request, response, n
     const { rows } = await client.query(
       `
         INSERT INTO products
-          (name, series, rarity, condition, unit, cards_per_unit, package_spec, cost, price, stock, low_stock_threshold, notes)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-        RETURNING id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost::text, average_cost::text, price::text, stock, low_stock_threshold, notes, created_at, updated_at
+          (name, series, rarity, condition, product_type, grading_company, grade, cert_number, unit, cards_per_unit, package_spec, cost, price, stock, low_stock_threshold, notes)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+        RETURNING id, name, series, rarity, condition, product_type, grading_company, grade, cert_number, unit, cards_per_unit, package_spec, cost::text, average_cost::text, price::text, stock, low_stock_threshold, notes, created_at, updated_at
       `,
       [
         product.name,
         product.series,
         product.rarity,
         product.condition,
+        product.productType,
+        product.gradingCompany,
+        product.grade,
+        product.certNumber,
         product.unit,
         product.cardsPerUnit,
         product.packageSpec,
@@ -1326,23 +1360,31 @@ app.put("/api/products/:id", currentUser, requireAdmin, async (request, response
             series = $2,
             rarity = $3,
             condition = $4,
-            unit = $5,
-            cards_per_unit = $6,
-            package_spec = $7,
-            cost = $8,
-            price = $9,
-            stock = $10,
-            low_stock_threshold = $11,
-            notes = $12,
+            product_type = $5,
+            grading_company = $6,
+            grade = $7,
+            cert_number = $8,
+            unit = $9,
+            cards_per_unit = $10,
+            package_spec = $11,
+            cost = $12,
+            price = $13,
+            stock = $14,
+            low_stock_threshold = $15,
+            notes = $16,
             updated_at = NOW()
-        WHERE id = $13
-        RETURNING id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost::text, average_cost::text, price::text, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at
+        WHERE id = $17
+        RETURNING id, name, series, rarity, condition, product_type, grading_company, grade, cert_number, unit, cards_per_unit, package_spec, cost::text, average_cost::text, price::text, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at
       `,
       [
         product.name,
         product.series,
         product.rarity,
         product.condition,
+        product.productType,
+        product.gradingCompany,
+        product.grade,
+        product.certNumber,
         product.unit,
         product.cardsPerUnit,
         product.packageSpec,
@@ -1425,7 +1467,7 @@ app.patch("/api/products/:id/restore", currentUser, requireAdmin, async (request
         UPDATE products
         SET deleted_at = NULL, deleted_by = NULL, updated_at = NOW()
         WHERE id = $1
-        RETURNING id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost::text, average_cost::text, price::text, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at
+        RETURNING id, name, series, rarity, condition, product_type, grading_company, grade, cert_number, unit, cards_per_unit, package_spec, cost::text, average_cost::text, price::text, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at
       `,
       [request.params.id]
     );
@@ -1500,6 +1542,9 @@ function parseCsv(text) {
 const importHeaderMap = {
   商品名稱: "name",
   name: "name",
+  商品類型: "productType",
+  productType: "productType",
+  product_type: "productType",
   成本: "cost",
   進貨成本: "cost",
   cost: "cost",
@@ -1515,6 +1560,14 @@ const importHeaderMap = {
   包裝規格: "packageSpec",
   packageSpec: "packageSpec",
   package_spec: "packageSpec",
+  鑑定公司: "gradingCompany",
+  gradingCompany: "gradingCompany",
+  grading_company: "gradingCompany",
+  grade: "grade",
+  Grade: "grade",
+  鑑定編號: "certNumber",
+  certNumber: "certNumber",
+  cert_number: "certNumber",
   稀有度: "rarity",
   rarity: "rarity",
   卡況: "condition",
@@ -1611,6 +1664,10 @@ app.post("/api/products/import", currentUser, requireAdmin, async (request, resp
         series: importValue(row, ["series", "系列", "卡牌系列"]),
         rarity: importValue(row, ["稀有度", "rarity"]) || "未分類",
         condition: importValue(row, ["卡況", "condition"]) || "未標示",
+        productType: importValue(row, ["productType", "商品類型"]) || "normal",
+        gradingCompany: importValue(row, ["gradingCompany", "鑑定公司"]),
+        grade: importValue(row, ["grade", "Grade"]),
+        certNumber: importValue(row, ["certNumber", "cert_number", "鑑定編號"]),
         unit,
         cardsPerUnit,
         packageSpec: importValue(row, ["packageSpec", "包裝規格", "package_spec"]) || `${cardsPerUnit} 張/${unit}`,
@@ -1629,15 +1686,19 @@ app.post("/api/products/import", currentUser, requireAdmin, async (request, resp
       const inserted = await client.query(
         `
           INSERT INTO products
-            (name, series, rarity, condition, unit, cards_per_unit, package_spec, cost, price, stock, low_stock_threshold, notes)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-          RETURNING id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost::text, average_cost::text, price::text, stock, low_stock_threshold, notes, created_at, updated_at
+            (name, series, rarity, condition, product_type, grading_company, grade, cert_number, unit, cards_per_unit, package_spec, cost, price, stock, low_stock_threshold, notes)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+          RETURNING id, name, series, rarity, condition, product_type, grading_company, grade, cert_number, unit, cards_per_unit, package_spec, cost::text, average_cost::text, price::text, stock, low_stock_threshold, notes, created_at, updated_at
         `,
         [
           product.name,
           product.series,
           product.rarity,
           product.condition,
+          product.productType,
+          product.gradingCompany,
+          product.grade,
+          product.certNumber,
           product.unit,
           product.cardsPerUnit,
           product.packageSpec,

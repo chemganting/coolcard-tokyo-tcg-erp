@@ -120,6 +120,10 @@ export async function initDb() {
         series TEXT NOT NULL,
         rarity TEXT NOT NULL,
         condition TEXT NOT NULL,
+        product_type TEXT NOT NULL DEFAULT 'normal' CHECK (product_type IN ('normal', 'graded')),
+        grading_company TEXT CHECK (grading_company IS NULL OR grading_company IN ('PSA', 'BGS', 'CGC')),
+        grade TEXT,
+        cert_number TEXT,
         unit TEXT NOT NULL DEFAULT '單張',
         cards_per_unit INTEGER NOT NULL DEFAULT 1,
         package_spec TEXT NOT NULL DEFAULT '單張卡',
@@ -200,12 +204,20 @@ export async function initDb() {
     await client.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT");
     await client.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE");
     await client.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()");
+    await client.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS product_type TEXT NOT NULL DEFAULT 'normal'");
+    await client.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS grading_company TEXT");
+    await client.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS grade TEXT");
+    await client.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS cert_number TEXT");
     await client.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS unit TEXT NOT NULL DEFAULT '單張'");
     await client.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS cards_per_unit INTEGER NOT NULL DEFAULT 1");
     await client.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS package_spec TEXT NOT NULL DEFAULT '單張卡'");
     await client.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS average_cost NUMERIC NOT NULL DEFAULT 0");
     await client.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ");
     await client.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS deleted_by INTEGER REFERENCES users(id) ON DELETE SET NULL");
+    await client.query("ALTER TABLE products DROP CONSTRAINT IF EXISTS products_product_type_check");
+    await client.query("ALTER TABLE products ADD CONSTRAINT products_product_type_check CHECK (product_type IN ('normal', 'graded'))");
+    await client.query("ALTER TABLE products DROP CONSTRAINT IF EXISTS products_grading_company_check");
+    await client.query("ALTER TABLE products ADD CONSTRAINT products_grading_company_check CHECK (grading_company IS NULL OR grading_company IN ('PSA', 'BGS', 'CGC'))");
     await client.query("ALTER TABLE sales ADD COLUMN IF NOT EXISTS sale_unit TEXT NOT NULL DEFAULT '單張'");
     await client.query("ALTER TABLE sales ADD COLUMN IF NOT EXISTS cards_per_unit INTEGER NOT NULL DEFAULT 1");
     await client.query("ALTER TABLE sales ADD COLUMN IF NOT EXISTS voided_at TIMESTAMPTZ");
@@ -218,6 +230,7 @@ export async function initDb() {
     await client.query("UPDATE products SET cards_per_unit = 1 WHERE cards_per_unit IS NULL OR cards_per_unit <= 0");
     await client.query("UPDATE products SET package_spec = '單張卡' WHERE package_spec IS NULL OR package_spec = ''");
     await client.query("UPDATE products SET average_cost = cost WHERE average_cost IS NULL OR average_cost = 0");
+    await client.query("UPDATE products SET product_type = 'normal', grading_company = NULL, grade = NULL, cert_number = NULL WHERE product_type IS DISTINCT FROM 'normal' OR grading_company IS NOT NULL OR grade IS NOT NULL OR cert_number IS NOT NULL");
     await client.query("UPDATE sales SET sale_unit = '單張' WHERE sale_unit IS NULL OR sale_unit = ''");
     await client.query("UPDATE sales SET cards_per_unit = 1 WHERE cards_per_unit IS NULL OR cards_per_unit <= 0");
     await client.query("UPDATE users SET display_name = name WHERE display_name IS NULL OR display_name = ''");
