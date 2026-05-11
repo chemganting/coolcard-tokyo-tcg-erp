@@ -47,6 +47,16 @@ const API_BASE_URL = (import.meta.env.VITE_API_URL ?? "").replace(/\/$/, "");
 const APP_NAME = "Coolcard Tokyo TCG ERP";
 const UNIT_OPTIONS = ["單張", "包", "盒", "箱", "組", "其他"];
 const PRODUCT_PAGE_SIZE = 20;
+const INVENTORY_LOG_TYPE_OPTIONS = [
+  { value: "全部", label: "全部異動類型" },
+  { value: "purchase", label: "進貨" },
+  { value: "sale", label: "銷售" },
+  { value: "import", label: "匯入" },
+  { value: "restore", label: "還原" },
+  { value: "manual_adjustment", label: "手動調整" },
+  { value: "void_sale", label: "作廢銷售" },
+  { value: "void_purchase", label: "作廢進貨" }
+];
 const WAKE_MESSAGE = "伺服器喚醒中，首次開啟約需 30–60 秒，請稍候";
 const WAKE_NOTICE_DELAY = 5000;
 const HEALTH_RETRY_DELAY = 2500;
@@ -137,6 +147,26 @@ async function fetchWithWake(path, options = {}) {
 
 function formatStock(product) {
   return `${number.format(product.stock ?? 0)} ${product.unit ?? "單張"}`;
+}
+
+function normalizeInventoryLogType(type) {
+  if (type === "purchase_update") return "manual_adjustment";
+  if (type === "sale_void") return "void_sale";
+  if (type === "purchase_void") return "void_purchase";
+  return type ?? "";
+}
+
+function inventoryLogTypeLabel(type) {
+  const normalizedType = normalizeInventoryLogType(type);
+  return INVENTORY_LOG_TYPE_OPTIONS.find((option) => option.value === normalizedType)?.label ?? normalizedType;
+}
+
+function inventoryLogTypeTone(type) {
+  const normalizedType = normalizeInventoryLogType(type);
+  if (normalizedType === "void_sale" || normalizedType === "void_purchase") return "bg-slate-100 text-slate-700";
+  if (normalizedType === "sale") return "bg-rose-50 text-rose-700";
+  if (normalizedType === "manual_adjustment") return "bg-amber-50 text-amber-700";
+  return "bg-emerald-50 text-emerald-700";
 }
 
 function formatBytes(bytes) {
@@ -360,14 +390,23 @@ function App() {
   const [employees, setEmployees] = useState([]);
   const [backups, setBackups] = useState([]);
   const [auditLogs, setAuditLogs] = useState([]);
+  const [inventoryLogs, setInventoryLogs] = useState([]);
   const [dashboard, setDashboard] = useState(null);
   const [profitReport, setProfitReport] = useState(null);
   const [syncingSheet, setSyncingSheet] = useState(false);
   const [clearingDemoData, setClearingDemoData] = useState(false);
   const [backupOpen, setBackupOpen] = useState(false);
   const [auditOpen, setAuditOpen] = useState(false);
+  const [inventoryOpen, setInventoryOpen] = useState(false);
   const [auditLoaded, setAuditLoaded] = useState(false);
   const [auditLoading, setAuditLoading] = useState(false);
+  const [inventoryFilters, setInventoryFilters] = useState({
+    product: "",
+    from: "",
+    to: "",
+    type: "全部"
+  });
+  const [expandedInventoryLogId, setExpandedInventoryLogId] = useState(null);
   const [employeeOpen, setEmployeeOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [autoSaveStatus, setAutoSaveStatus] = useState("");
@@ -450,7 +489,7 @@ function App() {
       Object.fromEntries(Object.entries(purchaseFilters).filter(([, value]) => value))
     ).toString();
     try {
-      const [productRows, deletedProductRows, purchaseRows, saleRows, dashboardRow, profitRow, employeeRows, backupRows] = await Promise.all([
+      const [productRows, deletedProductRows, purchaseRows, saleRows, dashboardRow, profitRow, employeeRows, backupRows, inventoryLogRows] = await Promise.all([
         api("/products"),
         isAdmin ? api("/products/deleted").catch(() => []) : Promise.resolve([]),
         api(`/purchases${purchaseQuery ? `?${purchaseQuery}` : ""}`).catch(() => []),
@@ -458,7 +497,8 @@ function App() {
         api("/dashboard"),
         api("/profit-report"),
         isAdmin ? api("/users") : Promise.resolve([]),
-        isAdmin ? api("/backups").catch(() => []) : Promise.resolve([])
+        isAdmin ? api("/backups").catch(() => []) : Promise.resolve([]),
+        api("/inventory-logs").catch(() => [])
       ]);
       setProducts(productRows);
       setDeletedProducts(deletedProductRows);
@@ -468,6 +508,7 @@ function App() {
       setProfitReport(profitRow);
       setEmployees(employeeRows);
       setBackups(backupRows);
+      setInventoryLogs(inventoryLogRows);
     } finally {
       setLoading(false);
     }
@@ -558,6 +599,28 @@ function App() {
   const latestBackupTime = backups[0]?.createdAt
     ? new Date(backups[0].createdAt).toLocaleString("zh-TW")
     : "尚無備份";
+  const filteredInventoryLogs = useMemo(() => {
+    const keyword = inventoryFilters.product.trim().toLowerCase();
+    const from = inventoryFilters.from || null;
+    const to = inventoryFilters.to || null;
+    const selectedType = inventoryFilters.type;
+    return inventoryLogs.filter((log) => {
+      const normalizedType = normalizeInventoryLogType(log.type);
+      const matchesKeyword = !keyword || String(log.productName ?? "").toLowerCase().includes(keyword);
+      const createdDate = String(log.createdAt ?? "").slice(0, 10);
+      const matchesFrom = !from || createdDate >= from;
+      const matchesTo = !to || createdDate <= to;
+      const matchesType = selectedType === "全部" || normalizedType === selectedType;
+      return matchesKeyword && matchesFrom && matchesTo && matchesType;
+    });
+  }, [inventoryFilters, inventoryLogs]);
+  const todayInventoryLogCount = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    return filteredInventoryLogs.filter((log) => String(log.createdAt ?? "").slice(0, 10) === today).length;
+  }, [filteredInventoryLogs]);
+  const latestInventoryLogTime = filteredInventoryLogs[0]?.createdAt
+    ? new Date(filteredInventoryLogs[0].createdAt).toLocaleString("zh-TW")
+    : "尚無紀錄";
 
   useEffect(() => {
     setProductPage(1);
@@ -1644,6 +1707,191 @@ function App() {
                 </div>
               </div>
             )}
+          </section>
+
+          <section id="庫存異動紀錄" className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+            <button
+              type="button"
+              onClick={() => setInventoryOpen((current) => !current)}
+              aria-expanded={inventoryOpen}
+              className="flex w-full items-center justify-between gap-3 px-4 py-4 text-left transition hover:bg-slate-50"
+            >
+              <div className="min-w-0">
+                <h2 className="truncate text-lg font-semibold text-slate-950">庫存異動紀錄</h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  今日異動筆數 {number.format(todayInventoryLogCount)} 筆 · 最近異動時間 {latestInventoryLogTime}
+                </p>
+              </div>
+              <ChevronDown className={`h-4 w-4 shrink-0 text-slate-500 transition-transform duration-300 ${inventoryOpen ? "rotate-180" : ""}`} />
+            </button>
+
+            <div
+              className="overflow-hidden transition-[max-height,opacity] duration-300 ease-out"
+              style={{ maxHeight: inventoryOpen ? "5000px" : "0px", opacity: inventoryOpen ? 1 : 0 }}
+              aria-hidden={!inventoryOpen}
+            >
+              <div className="border-t border-slate-200 px-4 py-4">
+                <div className="mb-4 grid gap-3 lg:grid-cols-[minmax(220px,1fr)_180px_180px_180px]">
+                  <div className="relative min-w-0">
+                    <Search className="pointer-events-none absolute left-3 top-2.5 h-5 w-5 text-slate-400" />
+                    <input
+                      value={inventoryFilters.product}
+                      onChange={(event) => setInventoryFilters((current) => ({ ...current, product: event.target.value }))}
+                      placeholder="搜尋商品名稱"
+                      className="h-12 w-full rounded-md border border-slate-300 bg-white pl-10 pr-3 text-base outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-100 sm:h-10 sm:text-sm"
+                    />
+                  </div>
+                  <TextInput
+                    type="date"
+                    value={inventoryFilters.from}
+                    onChange={(event) => setInventoryFilters((current) => ({ ...current, from: event.target.value }))}
+                  />
+                  <TextInput
+                    type="date"
+                    value={inventoryFilters.to}
+                    onChange={(event) => setInventoryFilters((current) => ({ ...current, to: event.target.value }))}
+                  />
+                  <SelectInput value={inventoryFilters.type} onChange={(event) => setInventoryFilters((current) => ({ ...current, type: event.target.value }))}>
+                    {INVENTORY_LOG_TYPE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </SelectInput>
+                </div>
+
+                <div className="mb-4 flex flex-col gap-2 text-sm text-slate-500 sm:flex-row sm:items-center sm:justify-between">
+                  <p>共 {number.format(filteredInventoryLogs.length)} 筆異動紀錄</p>
+                  <button
+                    type="button"
+                    className="self-start text-teal-700 hover:text-teal-800"
+                    onClick={() => setInventoryFilters({ product: "", from: "", to: "", type: "全部" })}
+                  >
+                    清除篩選
+                  </button>
+                </div>
+
+                <div className="hidden overflow-x-auto lg:block">
+                  <table className="min-w-full table-auto text-left text-sm">
+                    <thead className="border-b border-slate-200 text-xs text-slate-500">
+                      <tr>
+                        <th className="py-3 pr-4">時間</th>
+                        <th className="py-3 pr-4">商品名稱</th>
+                        <th className="py-3 pr-4">異動類型</th>
+                        <th className="py-3 pr-4">數量變化</th>
+                        <th className="py-3 pr-4">異動前</th>
+                        <th className="py-3 pr-4">異動後</th>
+                        <th className="py-3 pr-4">操作人</th>
+                        <th className="py-3 pr-4">備註</th>
+                        <th className="py-3">詳細</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {filteredInventoryLogs.map((log) => {
+                        const normalizedType = normalizeInventoryLogType(log.type);
+                        const expanded = expandedInventoryLogId === log.id;
+                        const delta = Number(log.quantityChange ?? 0);
+                        const deltaClass = delta > 0 ? "text-emerald-700" : delta < 0 ? "text-rose-700" : "text-slate-600";
+                        return (
+                          <React.Fragment key={log.id}>
+                            <tr className={expanded ? "bg-slate-50/60" : ""}>
+                              <td className="py-3 pr-4 whitespace-nowrap">{new Date(log.createdAt).toLocaleString("zh-TW")}</td>
+                              <td className="py-3 pr-4 font-medium">{log.productName ?? "-"}</td>
+                              <td className="py-3 pr-4">
+                                <span className={`rounded px-2 py-1 text-xs font-medium ${inventoryLogTypeTone(normalizedType)}`}>
+                                  {inventoryLogTypeLabel(normalizedType)}
+                                </span>
+                              </td>
+                              <td className={`py-3 pr-4 font-semibold ${deltaClass}`}>{delta > 0 ? `+${number.format(delta)}` : number.format(delta)}</td>
+                              <td className="py-3 pr-4">{number.format(Number(log.beforeQuantity ?? 0))}</td>
+                              <td className="py-3 pr-4">{number.format(Number(log.afterQuantity ?? 0))}</td>
+                              <td className="py-3 pr-4">{log.username ?? "-"}</td>
+                              <td className="py-3 pr-4">{log.note || "-"}</td>
+                              <td className="py-3">
+                                <Button type="button" variant="secondary" onClick={() => setExpandedInventoryLogId(expanded ? null : log.id)}>
+                                  <ChevronDown className={`h-4 w-4 transition-transform duration-300 ${expanded ? "rotate-180" : ""}`} />
+                                </Button>
+                              </td>
+                            </tr>
+                            {expanded && (
+                              <tr className="bg-slate-50/70">
+                                <td className="px-4 pb-4 pt-0" colSpan="9">
+                                  <div className="grid gap-2 rounded-md border border-slate-200 bg-white p-3 text-sm text-slate-600 sm:grid-cols-2 xl:grid-cols-4">
+                                    <div><span className="font-medium text-slate-900">時間：</span>{new Date(log.createdAt).toLocaleString("zh-TW")}</div>
+                                    <div><span className="font-medium text-slate-900">原始類型：</span>{log.type}</div>
+                                    <div><span className="font-medium text-slate-900">關聯類型：</span>{log.referenceType ?? "-"}</div>
+                                    <div><span className="font-medium text-slate-900">關聯編號：</span>{log.referenceId ?? "-"}</div>
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </React.Fragment>
+                        );
+                      })}
+                      {filteredInventoryLogs.length === 0 && (
+                        <tr>
+                          <td className="py-6 text-center text-slate-500" colSpan="9">沒有符合條件的庫存異動紀錄</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="grid gap-3 lg:hidden">
+                  {filteredInventoryLogs.map((log) => {
+                    const normalizedType = normalizeInventoryLogType(log.type);
+                    const expanded = expandedInventoryLogId === log.id;
+                    const delta = Number(log.quantityChange ?? 0);
+                    const deltaClass = delta > 0 ? "text-emerald-700" : delta < 0 ? "text-rose-700" : "text-slate-600";
+                    return (
+                      <article key={log.id} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="truncate font-semibold text-slate-950">{log.productName ?? "-"}</p>
+                            <p className="mt-1 text-sm text-slate-500">{new Date(log.createdAt).toLocaleString("zh-TW")}</p>
+                          </div>
+                          <span className={`rounded px-2 py-1 text-xs font-medium ${inventoryLogTypeTone(normalizedType)}`}>
+                            {inventoryLogTypeLabel(normalizedType)}
+                          </span>
+                        </div>
+                        <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                          <div>
+                            <p className="text-xs text-slate-500">數量變化</p>
+                            <p className={`font-semibold ${deltaClass}`}>{delta > 0 ? `+${number.format(delta)}` : number.format(delta)}</p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-slate-500">操作人</p>
+                            <p className="font-medium">{log.username ?? "-"}</p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-slate-500">異動前</p>
+                            <p>{number.format(Number(log.beforeQuantity ?? 0))}</p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-slate-500">異動後</p>
+                            <p>{number.format(Number(log.afterQuantity ?? 0))}</p>
+                          </div>
+                        </div>
+                        <div className="mt-3 flex items-center justify-between gap-3">
+                          <p className="min-w-0 truncate text-sm text-slate-500">{log.note || "無備註"}</p>
+                          <Button type="button" variant="secondary" className="shrink-0" onClick={() => setExpandedInventoryLogId(expanded ? null : log.id)}>
+                            <ChevronDown className={`h-4 w-4 transition-transform duration-300 ${expanded ? "rotate-180" : ""}`} />
+                          </Button>
+                        </div>
+                        {expanded && (
+                          <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
+                            <p><span className="font-medium text-slate-900">原始類型：</span>{log.type}</p>
+                            <p className="mt-1"><span className="font-medium text-slate-900">關聯類型：</span>{log.referenceType ?? "-"}</p>
+                            <p className="mt-1"><span className="font-medium text-slate-900">關聯編號：</span>{log.referenceId ?? "-"}</p>
+                          </div>
+                        )}
+                      </article>
+                    );
+                  })}
+                  {filteredInventoryLogs.length === 0 && <p className="py-6 text-center text-slate-500">沒有符合條件的庫存異動紀錄</p>}
+                </div>
+              </div>
+            </div>
           </section>
 
           {isAdmin && (

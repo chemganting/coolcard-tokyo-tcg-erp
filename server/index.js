@@ -2071,6 +2071,59 @@ app.get("/api/audit-logs", currentUser, async (request, response, next) => {
   }
 });
 
+app.get("/api/inventory-logs", currentUser, async (request, response, next) => {
+  try {
+    const params = [];
+    const filters = [];
+
+    if (request.query.from) {
+      params.push(String(request.query.from));
+      filters.push(`inventory_logs.created_at::date >= $${params.length}::date`);
+    }
+    if (request.query.to) {
+      params.push(String(request.query.to));
+      filters.push(`inventory_logs.created_at::date <= $${params.length}::date`);
+    }
+    if (request.query.type) {
+      params.push(String(request.query.type));
+      filters.push(`inventory_logs.action_type = $${params.length}`);
+    }
+    if (request.query.product) {
+      params.push(`%${String(request.query.product).trim()}%`);
+      filters.push(`products.name ILIKE $${params.length}`);
+    }
+
+    const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
+    const { rows } = await query(
+      `
+        SELECT
+          inventory_logs.id,
+          inventory_logs.product_id,
+          products.name AS product_name,
+          inventory_logs.user_id,
+          users.username,
+          inventory_logs.action_type AS type,
+          inventory_logs.quantity_delta AS quantity_change,
+          inventory_logs.stock_before AS before_quantity,
+          inventory_logs.stock_after AS after_quantity,
+          inventory_logs.reference_type,
+          inventory_logs.reference_id,
+          inventory_logs.note,
+          inventory_logs.created_at
+        FROM inventory_logs
+        LEFT JOIN products ON products.id = inventory_logs.product_id
+        LEFT JOIN users ON users.id = inventory_logs.user_id
+        ${where}
+        ORDER BY inventory_logs.created_at DESC, inventory_logs.id DESC
+      `,
+      params
+    );
+    response.json(rowsToCamel(rows));
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/undo", currentUser, async (request, response, next) => {
   const client = await pool.connect();
   try {
