@@ -363,6 +363,7 @@ function App() {
   const [profitReport, setProfitReport] = useState(null);
   const [syncingSheet, setSyncingSheet] = useState(false);
   const [clearingDemoData, setClearingDemoData] = useState(false);
+  const [backupOpen, setBackupOpen] = useState(false);
   const [auditOpen, setAuditOpen] = useState(false);
   const [auditLoaded, setAuditLoaded] = useState(false);
   const [auditLoading, setAuditLoading] = useState(false);
@@ -552,6 +553,9 @@ function App() {
   const latestAuditTime = auditLogs[0]?.createdAt
     ? new Date(auditLogs[0].createdAt).toLocaleString("zh-TW")
     : (auditLoaded ? "尚無紀錄" : "尚未載入");
+  const latestBackupTime = backups[0]?.createdAt
+    ? new Date(backups[0].createdAt).toLocaleString("zh-TW")
+    : "尚無備份";
 
   useEffect(() => {
     setProductPage(1);
@@ -2161,13 +2165,33 @@ function App() {
           )}
 
           {isAdmin && (
-            <section id="系統備份" className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                <div className="flex items-center gap-2">
-                  <Database className="h-5 w-5 text-slate-700" />
-                  <h2 className="text-lg font-semibold">系統備份</h2>
+            <section id="系統備份" className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+              <button
+                type="button"
+                className="flex w-full flex-col gap-3 px-4 py-4 text-left transition hover:bg-slate-50 sm:flex-row sm:items-center sm:justify-between"
+                aria-expanded={backupOpen}
+                onClick={() => setBackupOpen((open) => !open)}
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-slate-100 text-slate-700">
+                    <Database className="h-5 w-5" />
+                  </div>
+                  <div className="min-w-0">
+                    <h2 className="text-lg font-semibold text-slate-950">系統備份</h2>
+                    <p className="mt-1 text-sm text-slate-500">最近一次備份時間：{latestBackupTime}</p>
+                  </div>
                 </div>
-                <div className="flex flex-col gap-2 sm:flex-row">
+                <div className="flex shrink-0 items-center justify-between gap-3 sm:justify-end">
+                  <span className="rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600">備份總數：{backups.length} 筆</span>
+                  <span className="grid h-10 w-10 place-items-center rounded-md border border-slate-200 text-slate-600">
+                    {backupOpen ? <Minus className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+                  </span>
+                </div>
+              </button>
+
+              {backupOpen && (
+                <div className="border-t border-slate-200 p-4">
+                  <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:justify-end">
                   <Button type="button" variant="danger" disabled={clearingDemoData} onClick={clearDemoData}>
                     <AlertTriangle className="h-4 w-4" />
                     {clearingDemoData ? "清除中..." : "清除測試資料"}
@@ -2177,16 +2201,15 @@ function App() {
                     立即備份
                   </Button>
                 </div>
-              </div>
 
-              <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                還原會覆蓋目前 PostgreSQL 資料庫中的員工、商品與銷售資料。備份檔只可透過管理員 API 操作，不提供公開下載。
-              </div>
-              <div className="mb-4 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">
-                清除測試資料會先自動建立備份，接著移除預設商品、庫存、銷售紀錄、報表資料與測試操作紀錄；不會清空 users 表或刪除 admin、clerk、員工帳號。
-              </div>
+                  <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                    還原會覆蓋目前 PostgreSQL 資料庫中的員工、商品與銷售資料。備份檔只可透過管理員 API 操作，不提供公開下載。
+                  </div>
+                  <div className="mb-4 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">
+                    清除測試資料會先自動建立備份，接著移除預設商品、庫存、銷售紀錄、報表資料與測試操作紀錄；不會清空 users 表或刪除 admin、clerk、員工帳號。
+                  </div>
 
-              <div className="hidden overflow-x-auto lg:block">
+                  <div className="hidden overflow-x-auto lg:block">
                 <table className="min-w-full table-auto text-left text-sm">
                   <thead className="border-b border-slate-200 text-xs text-slate-500">
                     <tr>
@@ -2230,7 +2253,7 @@ function App() {
                   </tbody>
                 </table>
               </div>
-              <div className="grid gap-3 lg:hidden">
+                  <div className="grid gap-3 lg:hidden">
                 {backups.map((backup) => (
                   <article key={backup.filename} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
                     <div className="flex items-start justify-between gap-3">
@@ -2256,6 +2279,8 @@ function App() {
                 ))}
                 {backups.length === 0 && <p className="py-6 text-center text-slate-500">尚無備份紀錄</p>}
               </div>
+                </div>
+              )}
             </section>
           )}
 
