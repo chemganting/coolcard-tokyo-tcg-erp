@@ -7,6 +7,7 @@ import {
   CalendarDays,
   Database,
   Edit3,
+  ChevronDown,
   LogOut,
   ExternalLink,
   History,
@@ -367,6 +368,7 @@ function App() {
   const [auditOpen, setAuditOpen] = useState(false);
   const [auditLoaded, setAuditLoaded] = useState(false);
   const [auditLoading, setAuditLoading] = useState(false);
+  const [employeeOpen, setEmployeeOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [autoSaveStatus, setAutoSaveStatus] = useState("");
   const [undoing, setUndoing] = useState(false);
@@ -1972,193 +1974,218 @@ function App() {
           </section>
 
           {isAdmin && (
-            <section id="員工管理" className="grid min-w-0 gap-6 xl:grid-cols-[minmax(280px,0.75fr)_minmax(0,1.25fr)]">
-              <form onSubmit={submitEmployee} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-                <div className="mb-4 flex items-center gap-2">
-                  <UserRound className="h-5 w-5 text-slate-700" />
-                  <h2 className="text-lg font-semibold">新增員工</h2>
+            <section id="員工管理" className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+              <button
+                type="button"
+                onClick={() => setEmployeeOpen((current) => !current)}
+                aria-expanded={employeeOpen}
+                className="flex w-full items-center justify-between gap-3 px-4 py-4 text-left transition hover:bg-slate-50"
+              >
+                <div className="min-w-0">
+                  <h2 className="truncate text-lg font-semibold text-slate-950">員工管理</h2>
+                  <p className="mt-1 text-sm text-slate-500">員工總數 {number.format(employees.length)} 筆</p>
                 </div>
-                <div className="grid gap-3">
-                  <TextInput
-                    required
-                    placeholder="username"
-                    value={employeeForm.username}
-                    onChange={(e) => setEmployeeForm({ ...employeeForm, username: e.target.value })}
-                  />
-                  <TextInput
-                    required
-                    placeholder="員工名稱"
-                    value={employeeForm.name}
-                    onChange={(e) => setEmployeeForm({ ...employeeForm, name: e.target.value })}
-                  />
-                  <TextInput
-                    required
-                    placeholder="顯示名稱"
-                    value={employeeForm.displayName}
-                    onChange={(e) => setEmployeeForm({ ...employeeForm, displayName: e.target.value })}
-                  />
-                  <SelectInput value={employeeForm.role} onChange={(e) => setEmployeeForm({ ...employeeForm, role: e.target.value })}>
-                    <option value="admin">admin</option>
-                    <option value="clerk">clerk</option>
-                  </SelectInput>
-                  <TextInput
-                    required
-                    type="password"
-                    minLength="6"
-                    placeholder="初始密碼，至少 6 碼"
-                    value={employeeForm.password}
-                    onChange={(e) => setEmployeeForm({ ...employeeForm, password: e.target.value })}
-                  />
-                  <label className="flex items-center gap-2 text-sm text-slate-700">
-                    <input
-                      type="checkbox"
-                      checked={employeeForm.isActive}
-                      onChange={(e) => setEmployeeForm({ ...employeeForm, isActive: e.target.checked })}
-                    />
-                    啟用帳號
-                  </label>
-                  <div className="flex gap-2">
-                    <Button type="submit">建立員工</Button>
-                  </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">{number.format(employees.length)} 筆</span>
+                  <ChevronDown className={`h-4 w-4 text-slate-500 transition-transform duration-300 ${employeeOpen ? "rotate-180" : ""}`} />
                 </div>
-              </form>
+              </button>
+              <div
+                className="overflow-hidden transition-[max-height,opacity] duration-300 ease-out"
+                style={{ maxHeight: employeeOpen ? "3000px" : "0px", opacity: employeeOpen ? 1 : 0 }}
+                aria-hidden={!employeeOpen}
+              >
+                <div className="border-t border-slate-200 px-4 py-4">
+                  <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(280px,0.75fr)_minmax(0,1.25fr)]">
+                    <form onSubmit={submitEmployee} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                      <div className="mb-4 flex items-center gap-2">
+                        <UserRound className="h-5 w-5 text-slate-700" />
+                        <h2 className="text-lg font-semibold">新增員工</h2>
+                      </div>
+                      <div className="grid gap-3">
+                        <TextInput
+                          required
+                          placeholder="username"
+                          value={employeeForm.username}
+                          onChange={(e) => setEmployeeForm({ ...employeeForm, username: e.target.value })}
+                        />
+                        <TextInput
+                          required
+                          placeholder="員工名稱"
+                          value={employeeForm.name}
+                          onChange={(e) => setEmployeeForm({ ...employeeForm, name: e.target.value })}
+                        />
+                        <TextInput
+                          required
+                          placeholder="顯示名稱"
+                          value={employeeForm.displayName}
+                          onChange={(e) => setEmployeeForm({ ...employeeForm, displayName: e.target.value })}
+                        />
+                        <SelectInput value={employeeForm.role} onChange={(e) => setEmployeeForm({ ...employeeForm, role: e.target.value })}>
+                          <option value="admin">admin</option>
+                          <option value="clerk">clerk</option>
+                        </SelectInput>
+                        <TextInput
+                          required
+                          type="password"
+                          minLength="6"
+                          placeholder="初始密碼，至少 6 碼"
+                          value={employeeForm.password}
+                          onChange={(e) => setEmployeeForm({ ...employeeForm, password: e.target.value })}
+                        />
+                        <label className="flex items-center gap-2 text-sm text-slate-700">
+                          <input
+                            type="checkbox"
+                            checked={employeeForm.isActive}
+                            onChange={(e) => setEmployeeForm({ ...employeeForm, isActive: e.target.checked })}
+                          />
+                          啟用帳號
+                        </label>
+                        <div className="flex gap-2">
+                          <Button type="submit">建立員工</Button>
+                        </div>
+                      </div>
+                    </form>
 
-              <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-                <div className="mb-4 flex items-center gap-2">
-                  <UserRound className="h-5 w-5 text-slate-700" />
-                  <h2 className="text-lg font-semibold">所有員工</h2>
-                </div>
-                <div className="hidden overflow-x-auto lg:block">
-                  <table className="min-w-full table-auto text-left text-sm">
-                    <thead className="border-b border-slate-200 text-xs text-slate-500">
-                      <tr>
-                        <th className="py-3 pr-4">username</th>
-                        <th className="py-3 pr-4">name</th>
-                        <th className="py-3 pr-4">displayName</th>
-                        <th className="py-3 pr-4">role</th>
-                        <th className="py-3 pr-4">狀態</th>
-                        <th className="py-3 pr-4">createdAt</th>
-                        <th className="py-3 pr-4">updatedAt</th>
-                        <th className="py-3">操作</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {employees.map((employee) => {
-                        const isEditingEmployee = editingEmployeeId === employee.id;
-                        return (
-                          <tr key={employee.id}>
-                            <td className="py-3 pr-4 font-mono text-xs">{employee.username}</td>
-                            <td className="py-3 pr-4">
-                              {isEditingEmployee ? (
-                                <TextInput
-                                  required
-                                  value={employeeDraft?.name ?? ""}
-                                  onChange={(e) => setEmployeeDraft((current) => ({ ...current, name: e.target.value }))}
-                                />
-                              ) : (
-                                employee.name
-                              )}
-                            </td>
-                            <td className="py-3 pr-4">
-                              {isEditingEmployee ? (
-                                <TextInput
-                                  required
-                                  value={employeeDraft?.displayName ?? ""}
-                                  onChange={(e) => setEmployeeDraft((current) => ({ ...current, displayName: e.target.value }))}
-                                />
-                              ) : (
-                                employee.displayName
-                              )}
-                            </td>
-                            <td className="py-3 pr-4">
-                              {isEditingEmployee ? (
-                                <SelectInput
-                                  value={employeeDraft?.role ?? "clerk"}
-                                  onChange={(e) => setEmployeeDraft((current) => ({ ...current, role: e.target.value }))}
-                                >
-                                  <option value="admin">admin</option>
-                                  <option value="clerk">clerk</option>
-                                </SelectInput>
-                              ) : (
-                                <span className="rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">{employee.role}</span>
-                              )}
-                            </td>
-                            <td className="py-3 pr-4">
+                    <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                      <div className="mb-4 flex items-center gap-2">
+                        <UserRound className="h-5 w-5 text-slate-700" />
+                        <h2 className="text-lg font-semibold">所有員工</h2>
+                      </div>
+                      <div className="hidden overflow-x-auto lg:block">
+                        <table className="min-w-full table-auto text-left text-sm">
+                          <thead className="border-b border-slate-200 text-xs text-slate-500">
+                            <tr>
+                              <th className="py-3 pr-4">username</th>
+                              <th className="py-3 pr-4">name</th>
+                              <th className="py-3 pr-4">displayName</th>
+                              <th className="py-3 pr-4">role</th>
+                              <th className="py-3 pr-4">狀態</th>
+                              <th className="py-3 pr-4">createdAt</th>
+                              <th className="py-3 pr-4">updatedAt</th>
+                              <th className="py-3">操作</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {employees.map((employee) => {
+                              const isEditingEmployee = editingEmployeeId === employee.id;
+                              return (
+                                <tr key={employee.id}>
+                                  <td className="py-3 pr-4 font-mono text-xs">{employee.username}</td>
+                                  <td className="py-3 pr-4">
+                                    {isEditingEmployee ? (
+                                      <TextInput
+                                        required
+                                        value={employeeDraft?.name ?? ""}
+                                        onChange={(e) => setEmployeeDraft((current) => ({ ...current, name: e.target.value }))}
+                                      />
+                                    ) : (
+                                      employee.name
+                                    )}
+                                  </td>
+                                  <td className="py-3 pr-4">
+                                    {isEditingEmployee ? (
+                                      <TextInput
+                                        required
+                                        value={employeeDraft?.displayName ?? ""}
+                                        onChange={(e) => setEmployeeDraft((current) => ({ ...current, displayName: e.target.value }))}
+                                      />
+                                    ) : (
+                                      employee.displayName
+                                    )}
+                                  </td>
+                                  <td className="py-3 pr-4">
+                                    {isEditingEmployee ? (
+                                      <SelectInput
+                                        value={employeeDraft?.role ?? "clerk"}
+                                        onChange={(e) => setEmployeeDraft((current) => ({ ...current, role: e.target.value }))}
+                                      >
+                                        <option value="admin">admin</option>
+                                        <option value="clerk">clerk</option>
+                                      </SelectInput>
+                                    ) : (
+                                      <span className="rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">{employee.role}</span>
+                                    )}
+                                  </td>
+                                  <td className="py-3 pr-4">
+                                    <span className={`rounded px-2 py-1 text-xs font-medium ${employee.isActive ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}>
+                                      {employee.isActive ? "啟用" : "停用"}
+                                    </span>
+                                  </td>
+                                  <td className="py-3 pr-4">{new Date(employee.createdAt).toLocaleDateString("zh-TW")}</td>
+                                  <td className="py-3 pr-4">{new Date(employee.updatedAt).toLocaleDateString("zh-TW")}</td>
+                                  <td className="py-3">
+                                    {isEditingEmployee ? (
+                                      <div className="flex flex-wrap gap-2">
+                                        <Button type="button" onClick={() => saveEmployeeEdit(employee)}>
+                                          儲存
+                                        </Button>
+                                        <Button type="button" variant="secondary" onClick={cancelEmployeeEdit}>
+                                          取消
+                                        </Button>
+                                      </div>
+                                    ) : (
+                                      <>
+                                        <div className="flex flex-wrap gap-2">
+                                          <Button type="button" variant="secondary" onClick={() => editEmployee(employee)}>
+                                            <Edit3 className="h-4 w-4" />
+                                          </Button>
+                                          <Button type="button" variant="secondary" onClick={() => toggleEmployeeStatus(employee)}>
+                                            {employee.isActive ? "停用" : "啟用"}
+                                          </Button>
+                                          <Button type="button" variant="danger" disabled={employee.id === auth.user.id} onClick={() => deleteEmployee(employee)}>
+                                            <Trash2 className="h-4 w-4" />
+                                          </Button>
+                                        </div>
+                                        <div className="mt-2 flex gap-2">
+                                          <TextInput
+                                            type="password"
+                                            minLength="6"
+                                            placeholder="新密碼"
+                                            value={passwordByUser[employee.id] ?? ""}
+                                            onChange={(e) => setPasswordByUser((current) => ({ ...current, [employee.id]: e.target.value }))}
+                                          />
+                                          <Button type="button" variant="secondary" onClick={() => updateEmployeePassword(employee)}>
+                                            改密碼
+                                          </Button>
+                                        </div>
+                                      </>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                      <div className="grid gap-3 lg:hidden">
+                        {employees.map((employee) => (
+                          <article key={employee.id} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <p className="font-semibold">{employee.displayName || employee.name}</p>
+                                <p className="mt-1 text-sm text-slate-500">{employee.username} · {employee.role}</p>
+                              </div>
                               <span className={`rounded px-2 py-1 text-xs font-medium ${employee.isActive ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}>
                                 {employee.isActive ? "啟用" : "停用"}
                               </span>
-                            </td>
-                            <td className="py-3 pr-4">{new Date(employee.createdAt).toLocaleDateString("zh-TW")}</td>
-                            <td className="py-3 pr-4">{new Date(employee.updatedAt).toLocaleDateString("zh-TW")}</td>
-                            <td className="py-3">
-                              {isEditingEmployee ? (
-                                <div className="flex flex-wrap gap-2">
-                                  <Button type="button" onClick={() => saveEmployeeEdit(employee)}>
-                                    儲存
-                                  </Button>
-                                  <Button type="button" variant="secondary" onClick={cancelEmployeeEdit}>
-                                    取消
-                                  </Button>
-                                </div>
-                              ) : (
-                                <>
-                                  <div className="flex flex-wrap gap-2">
-                                    <Button type="button" variant="secondary" onClick={() => editEmployee(employee)}>
-                                      <Edit3 className="h-4 w-4" />
-                                    </Button>
-                                    <Button type="button" variant="secondary" onClick={() => toggleEmployeeStatus(employee)}>
-                                      {employee.isActive ? "停用" : "啟用"}
-                                    </Button>
-                                    <Button type="button" variant="danger" disabled={employee.id === auth.user.id} onClick={() => deleteEmployee(employee)}>
-                                      <Trash2 className="h-4 w-4" />
-                                    </Button>
-                                  </div>
-                                  <div className="mt-2 flex gap-2">
-                                    <TextInput
-                                      type="password"
-                                      minLength="6"
-                                      placeholder="新密碼"
-                                      value={passwordByUser[employee.id] ?? ""}
-                                      onChange={(e) => setPasswordByUser((current) => ({ ...current, [employee.id]: e.target.value }))}
-                                    />
-                                    <Button type="button" variant="secondary" onClick={() => updateEmployeePassword(employee)}>
-                                      改密碼
-                                    </Button>
-                                  </div>
-                                </>
-                              )}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-                <div className="grid gap-3 lg:hidden">
-                  {employees.map((employee) => (
-                    <article key={employee.id} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="font-semibold">{employee.displayName || employee.name}</p>
-                          <p className="mt-1 text-sm text-slate-500">{employee.username} · {employee.role}</p>
-                        </div>
-                        <span className={`rounded px-2 py-1 text-xs font-medium ${employee.isActive ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}>
-                          {employee.isActive ? "啟用" : "停用"}
-                        </span>
+                            </div>
+                            <div className="mt-3 grid grid-cols-3 gap-2">
+                              <Button type="button" variant="secondary" onClick={() => editEmployee(employee)}>
+                                <Edit3 className="h-4 w-4" />
+                              </Button>
+                              <Button type="button" variant="secondary" onClick={() => toggleEmployeeStatus(employee)}>
+                                {employee.isActive ? "停用" : "啟用"}
+                              </Button>
+                              <Button type="button" variant="danger" disabled={employee.id === auth.user.id} onClick={() => deleteEmployee(employee)}>
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </article>
+                        ))}
                       </div>
-                      <div className="mt-3 grid grid-cols-3 gap-2">
-                        <Button type="button" variant="secondary" onClick={() => editEmployee(employee)}>
-                          <Edit3 className="h-4 w-4" />
-                        </Button>
-                        <Button type="button" variant="secondary" onClick={() => toggleEmployeeStatus(employee)}>
-                          {employee.isActive ? "停用" : "啟用"}
-                        </Button>
-                        <Button type="button" variant="danger" disabled={employee.id === auth.user.id} onClick={() => deleteEmployee(employee)}>
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </article>
-                  ))}
+                    </div>
+                  </div>
                 </div>
               </div>
             </section>
