@@ -1,269 +1,18 @@
-import Database from "better-sqlite3";
 import bcrypt from "bcryptjs";
-import { dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import pg from "pg";
 
-const currentDir = dirname(fileURLToPath(import.meta.url));
-const dbPath = process.env.DB_PATH ?? `${currentDir}/pokemon-card-erp.sqlite`;
+const { Pool } = pg;
 
-export const db = new Database(dbPath);
-db.pragma("journal_mode = WAL");
-db.pragma("foreign_keys = ON");
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT NOT NULL UNIQUE,
-    password_hash TEXT,
-    name TEXT NOT NULL,
-    role TEXT NOT NULL CHECK (role IN ('admin', 'clerk')),
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE TABLE IF NOT EXISTS products (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    series TEXT NOT NULL,
-    rarity TEXT NOT NULL,
-    condition TEXT NOT NULL,
-    unit TEXT NOT NULL DEFAULT '單張',
-    cards_per_unit INTEGER NOT NULL DEFAULT 1,
-    package_spec TEXT NOT NULL DEFAULT '單張卡',
-    cost REAL NOT NULL,
-    price REAL NOT NULL,
-    stock INTEGER NOT NULL DEFAULT 0,
-    low_stock_threshold INTEGER NOT NULL DEFAULT 3,
-    notes TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE TABLE IF NOT EXISTS sales (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    product_id INTEGER NOT NULL,
-    user_id INTEGER NOT NULL,
-    quantity INTEGER NOT NULL,
-    sale_unit TEXT NOT NULL DEFAULT '單張',
-    cards_per_unit INTEGER NOT NULL DEFAULT 1,
-    unit_price REAL NOT NULL,
-    total REAL NOT NULL,
-    sold_at TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (product_id) REFERENCES products(id),
-    FOREIGN KEY (user_id) REFERENCES users(id)
-  );
-`);
-
-const userColumns = db.prepare("PRAGMA table_info(users)").all();
-const hasLegacyPassword = userColumns.some((column) => column.name === "password");
-const hasPasswordHash = userColumns.some((column) => column.name === "password_hash");
-
-if (!hasPasswordHash) {
-  db.prepare("ALTER TABLE users ADD COLUMN password_hash TEXT").run();
+if (!process.env.DATABASE_URL) {
+  console.warn("DATABASE_URL is not set. PostgreSQL connection will fail until it is configured.");
 }
 
-if (hasLegacyPassword) {
-  const legacyUsers = db.prepare("SELECT id, password, password_hash FROM users").all();
-  const updatePasswordHash = db.prepare("UPDATE users SET password_hash = ? WHERE id = ?");
-  legacyUsers.forEach((user) => {
-    if (!user.password_hash && user.password) {
-      updatePasswordHash.run(bcrypt.hashSync(user.password, 12), user.id);
-    }
-  });
-}
-
-function ensureColumn(tableName, columnName, definition) {
-  const columns = db.prepare(`PRAGMA table_info(${quoteIdentifier(tableName)})`).all();
-  if (!columns.some((column) => column.name === columnName)) {
-    db.prepare(`ALTER TABLE ${quoteIdentifier(tableName)} ADD COLUMN ${quoteIdentifier(columnName)} ${definition}`).run();
-  }
-}
-
-function migrateProductPackaging() {
-  ensureColumn("products", "unit", "TEXT NOT NULL DEFAULT '單張'");
-  ensureColumn("products", "cards_per_unit", "INTEGER NOT NULL DEFAULT 1");
-  ensureColumn("products", "package_spec", "TEXT NOT NULL DEFAULT '單張卡'");
-  ensureColumn("sales", "sale_unit", "TEXT NOT NULL DEFAULT '單張'");
-  ensureColumn("sales", "cards_per_unit", "INTEGER NOT NULL DEFAULT 1");
-
-  db.prepare("UPDATE products SET unit = '單張' WHERE unit IS NULL OR unit = ''").run();
-  db.prepare("UPDATE products SET cards_per_unit = 1 WHERE cards_per_unit IS NULL OR cards_per_unit <= 0").run();
-  db.prepare("UPDATE products SET package_spec = '單張卡' WHERE package_spec IS NULL OR package_spec = ''").run();
-  db.prepare("UPDATE sales SET sale_unit = '單張' WHERE sale_unit IS NULL OR sale_unit = ''").run();
-  db.prepare("UPDATE sales SET cards_per_unit = 1 WHERE cards_per_unit IS NULL OR cards_per_unit <= 0").run();
-}
-
-migrateProductPackaging();
-
-const userCount = db.prepare("SELECT COUNT(*) AS count FROM users").get().count;
-
-if (userCount === 0) {
-  const seed = db.transaction(() => {
-    const insertUser = db.prepare(`
-      INSERT INTO users (username, password_hash, name, role)
-      VALUES (@username, @passwordHash, @name, @role)
-    `);
-    const insertProduct = db.prepare(`
-      INSERT INTO products (name, series, rarity, condition, unit, cards_per_unit, package_spec, cost, price, stock, low_stock_threshold, notes)
-      VALUES (@name, @series, @rarity, @condition, @unit, @cardsPerUnit, @packageSpec, @cost, @price, @stock, @lowStockThreshold, @notes)
-    `);
-
-    [
-      { username: "admin", passwordHash: bcrypt.hashSync(process.env.ADMIN_PASSWORD ?? "admin123", 12), name: "Brian", role: "admin" },
-      { username: "clerk", passwordHash: bcrypt.hashSync(process.env.CLERK_PASSWORD ?? "clerk123", 12), name: "店員 小霞", role: "clerk" }
-    ].forEach((user) => insertUser.run(user));
-
-    [
-      {
-        name: "皮卡丘 ex",
-        series: "朱&紫 擴充包",
-        rarity: "SAR",
-        condition: "近全新",
-        unit: "單張",
-        cardsPerUnit: 1,
-        packageSpec: "單張卡",
-        cost: 1800,
-        price: 2580,
-        stock: 4,
-        lowStockThreshold: 3,
-        notes: "熱門展示卡，建議放防盜櫃。"
-      },
-      {
-        name: "噴火龍 VSTAR",
-        series: "VSTAR Universe",
-        rarity: "RRR",
-        condition: "良好",
-        unit: "單張",
-        cardsPerUnit: 1,
-        packageSpec: "單張卡",
-        cost: 420,
-        price: 780,
-        stock: 2,
-        lowStockThreshold: 3,
-        notes: "低庫存，需補貨。"
-      },
-      {
-        name: "莉莉艾的全力",
-        series: "夢幻收藏",
-        rarity: "SR",
-        condition: "近全新",
-        unit: "單張",
-        cardsPerUnit: 1,
-        packageSpec: "單張卡",
-        cost: 5200,
-        price: 7200,
-        stock: 1,
-        lowStockThreshold: 2,
-        notes: "高單價卡，售出前需二次確認卡況。"
-      },
-      {
-        name: "月亮伊布",
-        series: "Eevee Heroes",
-        rarity: "HR",
-        condition: "輕微白邊",
-        unit: "單張",
-        cardsPerUnit: 1,
-        packageSpec: "單張卡",
-        cost: 9500,
-        price: 12800,
-        stock: 2,
-        lowStockThreshold: 1,
-        notes: "收藏客詢問度高。"
-      },
-      {
-        name: "超夢 V",
-        series: "Pokemon GO",
-        rarity: "RR",
-        condition: "近全新",
-        unit: "包",
-        cardsPerUnit: 5,
-        packageSpec: "5 張/包",
-        cost: 120,
-        price: 250,
-        stock: 18,
-        lowStockThreshold: 5,
-        notes: "適合新手牌組搭配銷售。"
-      },
-      {
-        name: "博士的研究",
-        series: "標準環境補充",
-        rarity: "U",
-        condition: "全新",
-        unit: "盒",
-        cardsPerUnit: 30,
-        packageSpec: "30 張/盒",
-        cost: 12,
-        price: 30,
-        stock: 72,
-        lowStockThreshold: 20,
-        notes: "常用訓練家卡。"
-      }
-    ].forEach((product) => insertProduct.run(product));
-
-    const products = db.prepare("SELECT id, price FROM products ORDER BY id").all();
-    const admin = db.prepare("SELECT id FROM users WHERE username = 'admin'").get();
-    const clerk = db.prepare("SELECT id FROM users WHERE username = 'clerk'").get();
-    const insertSale = db.prepare(`
-      INSERT INTO sales (product_id, user_id, quantity, sale_unit, cards_per_unit, unit_price, total, sold_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    [
-      [products[0], clerk.id, 1, "2026-05-11"],
-      [products[4], clerk.id, 3, "2026-05-11"],
-      [products[5], admin.id, 8, "2026-05-10"],
-      [products[1], admin.id, 1, "2026-05-09"]
-    ].forEach(([product, userId, quantity, soldAt]) => {
-      insertSale.run(product.id, userId, quantity, "單張", 1, product.price, product.price * quantity, soldAt);
-      db.prepare("UPDATE products SET stock = stock - ? WHERE id = ?").run(quantity, product.id);
-    });
-  });
-
-  seed();
-}
-
-function quoteIdentifier(identifier) {
-  return `"${identifier.replaceAll("\"", "\"\"")}"`;
-}
-
-function tableExists(tableName) {
-  return Boolean(
-    db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
-      .get(tableName)
-  );
-}
-
-function migrateStoreManagerName() {
-  const candidateTables = ["users", "staff", "staffs", "admin", "admins"];
-  const candidateColumns = ["name", "displayName", "display_name", "fullName", "full_name"];
-
-  candidateTables.forEach((tableName) => {
-    if (!tableExists(tableName)) return;
-
-    const columns = db.prepare(`PRAGMA table_info(${quoteIdentifier(tableName)})`).all();
-    const columnNames = new Set(columns.map((column) => column.name));
-
-    candidateColumns.forEach((columnName) => {
-      if (!columnNames.has(columnName)) return;
-
-      db.prepare(`
-        UPDATE ${quoteIdentifier(tableName)}
-        SET ${quoteIdentifier(columnName)} = ?
-        WHERE ${quoteIdentifier(columnName)} IN (?, ?)
-           OR ${quoteIdentifier(columnName)} LIKE ?
-      `).run("Brian", "小智", "店長 小智", "%小智%");
-    });
-  });
-
-  if (tableExists("users")) {
-    const columns = db.prepare("PRAGMA table_info(users)").all();
-    if (columns.some((column) => column.name === "username") && columns.some((column) => column.name === "name")) {
-      db.prepare("UPDATE users SET name = ? WHERE username = ?").run("Brian", "admin");
-    }
-  }
-}
-
-migrateStoreManagerName();
+export const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.DATABASE_URL?.includes("localhost")
+    ? false
+    : { rejectUnauthorized: false }
+});
 
 export function toCamel(row) {
   if (!row) return row;
@@ -273,4 +22,208 @@ export function toCamel(row) {
       value
     ])
   );
+}
+
+export function rowsToCamel(rows) {
+  return rows.map(toCamel);
+}
+
+async function tableExists(client, tableName) {
+  const { rowCount } = await client.query(
+    "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1",
+    [tableName]
+  );
+  return rowCount > 0;
+}
+
+async function columnExists(client, tableName, columnName) {
+  const { rowCount } = await client.query(
+    `
+      SELECT 1
+      FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2
+    `,
+    [tableName, columnName]
+  );
+  return rowCount > 0;
+}
+
+async function migrateLegacyPassword(client) {
+  if (!(await columnExists(client, "users", "password"))) return;
+  const { rows } = await client.query("SELECT id, password, password_hash FROM users");
+  for (const user of rows) {
+    if (!user.password_hash && user.password) {
+      await client.query("UPDATE users SET password_hash = $1 WHERE id = $2", [
+        bcrypt.hashSync(user.password, 12),
+        user.id
+      ]);
+    }
+  }
+}
+
+async function migrateStoreManagerName(client) {
+  const candidateTables = ["users", "staff", "staffs", "admin", "admins"];
+  const candidateColumns = ["name", "displayName", "display_name", "fullName", "full_name"];
+
+  for (const tableName of candidateTables) {
+    if (!(await tableExists(client, tableName))) continue;
+
+    for (const columnName of candidateColumns) {
+      if (!(await columnExists(client, tableName, columnName))) continue;
+      await client.query(
+        `
+          UPDATE ${quoteIdentifier(tableName)}
+          SET ${quoteIdentifier(columnName)} = $1
+          WHERE ${quoteIdentifier(columnName)} IN ($2, $3)
+             OR ${quoteIdentifier(columnName)} LIKE $4
+        `,
+        ["Brian", "小智", "店長 小智", "%小智%"]
+      );
+    }
+  }
+
+  if ((await tableExists(client, "users")) && (await columnExists(client, "users", "username")) && (await columnExists(client, "users", "name"))) {
+    await client.query("UPDATE users SET name = $1 WHERE username = $2", ["Brian", "admin"]);
+  }
+}
+
+function quoteIdentifier(identifier) {
+  return `"${identifier.replaceAll("\"", "\"\"")}"`;
+}
+
+export async function query(text, params = []) {
+  const result = await pool.query(text, params);
+  return result;
+}
+
+export async function initDb() {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        username TEXT NOT NULL UNIQUE,
+        password_hash TEXT,
+        name TEXT NOT NULL,
+        role TEXT NOT NULL CHECK (role IN ('admin', 'clerk')),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS products (
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        series TEXT NOT NULL,
+        rarity TEXT NOT NULL,
+        condition TEXT NOT NULL,
+        unit TEXT NOT NULL DEFAULT '單張',
+        cards_per_unit INTEGER NOT NULL DEFAULT 1,
+        package_spec TEXT NOT NULL DEFAULT '單張卡',
+        cost NUMERIC NOT NULL,
+        price NUMERIC NOT NULL,
+        stock INTEGER NOT NULL DEFAULT 0,
+        low_stock_threshold INTEGER NOT NULL DEFAULT 3,
+        notes TEXT NOT NULL DEFAULT '',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS sales (
+        id SERIAL PRIMARY KEY,
+        product_id INTEGER NOT NULL REFERENCES products(id),
+        user_id INTEGER NOT NULL REFERENCES users(id),
+        quantity INTEGER NOT NULL,
+        sale_unit TEXT NOT NULL DEFAULT '單張',
+        cards_per_unit INTEGER NOT NULL DEFAULT 1,
+        unit_price NUMERIC NOT NULL,
+        total NUMERIC NOT NULL,
+        sold_at DATE NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await client.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT");
+    await client.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS unit TEXT NOT NULL DEFAULT '單張'");
+    await client.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS cards_per_unit INTEGER NOT NULL DEFAULT 1");
+    await client.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS package_spec TEXT NOT NULL DEFAULT '單張卡'");
+    await client.query("ALTER TABLE sales ADD COLUMN IF NOT EXISTS sale_unit TEXT NOT NULL DEFAULT '單張'");
+    await client.query("ALTER TABLE sales ADD COLUMN IF NOT EXISTS cards_per_unit INTEGER NOT NULL DEFAULT 1");
+
+    await client.query("UPDATE products SET unit = '單張' WHERE unit IS NULL OR unit = ''");
+    await client.query("UPDATE products SET cards_per_unit = 1 WHERE cards_per_unit IS NULL OR cards_per_unit <= 0");
+    await client.query("UPDATE products SET package_spec = '單張卡' WHERE package_spec IS NULL OR package_spec = ''");
+    await client.query("UPDATE sales SET sale_unit = '單張' WHERE sale_unit IS NULL OR sale_unit = ''");
+    await client.query("UPDATE sales SET cards_per_unit = 1 WHERE cards_per_unit IS NULL OR cards_per_unit <= 0");
+
+    await migrateLegacyPassword(client);
+
+    const { rows: userCountRows } = await client.query("SELECT COUNT(*)::int AS count FROM users");
+    if (userCountRows[0].count === 0) {
+      await seedData(client);
+    }
+
+    await migrateStoreManagerName(client);
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function seedData(client) {
+  const adminPasswordHash = bcrypt.hashSync(process.env.ADMIN_PASSWORD ?? "admin123", 12);
+  const clerkPasswordHash = bcrypt.hashSync(process.env.CLERK_PASSWORD ?? "clerk123", 12);
+
+  const admin = await client.query(
+    "INSERT INTO users (username, password_hash, name, role) VALUES ($1, $2, $3, $4) RETURNING id",
+    ["admin", adminPasswordHash, "Brian", "admin"]
+  );
+  const clerk = await client.query(
+    "INSERT INTO users (username, password_hash, name, role) VALUES ($1, $2, $3, $4) RETURNING id",
+    ["clerk", clerkPasswordHash, "店員 小霞", "clerk"]
+  );
+
+  const seedProducts = [
+    ["皮卡丘 ex", "朱&紫 擴充包", "SAR", "近全新", "單張", 1, "單張卡", 1800, 2580, 4, 3, "熱門展示卡，建議放防盜櫃。"],
+    ["噴火龍 VSTAR", "VSTAR Universe", "RRR", "良好", "單張", 1, "單張卡", 420, 780, 2, 3, "低庫存，需補貨。"],
+    ["莉莉艾的全力", "夢幻收藏", "SR", "近全新", "單張", 1, "單張卡", 5200, 7200, 1, 2, "高單價卡，售出前需二次確認卡況。"],
+    ["月亮伊布", "Eevee Heroes", "HR", "輕微白邊", "單張", 1, "單張卡", 9500, 12800, 2, 1, "收藏客詢問度高。"],
+    ["超夢 V", "Pokemon GO", "RR", "近全新", "包", 5, "5 張/包", 120, 250, 18, 5, "適合新手牌組搭配銷售。"],
+    ["博士的研究", "標準環境補充", "U", "全新", "盒", 30, "30 張/盒", 12, 30, 72, 20, "常用訓練家卡。"]
+  ];
+
+  const productIds = [];
+  for (const product of seedProducts) {
+    const { rows } = await client.query(
+      `
+        INSERT INTO products
+          (name, series, rarity, condition, unit, cards_per_unit, package_spec, cost, price, stock, low_stock_threshold, notes)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        RETURNING id, price
+      `,
+      product
+    );
+    productIds.push(rows[0]);
+  }
+
+  const seedSales = [
+    [productIds[0], clerk.rows[0].id, 1, "2026-05-11"],
+    [productIds[4], clerk.rows[0].id, 3, "2026-05-11"],
+    [productIds[5], admin.rows[0].id, 8, "2026-05-10"],
+    [productIds[1], admin.rows[0].id, 1, "2026-05-09"]
+  ];
+
+  for (const [product, userId, quantity, soldAt] of seedSales) {
+    await client.query(
+      `
+        INSERT INTO sales (product_id, user_id, quantity, sale_unit, cards_per_unit, unit_price, total, sold_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `,
+      [product.id, userId, quantity, "單張", 1, product.price, Number(product.price) * quantity, soldAt]
+    );
+    await client.query("UPDATE products SET stock = stock - $1 WHERE id = $2", [quantity, product.id]);
+  }
 }

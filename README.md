@@ -1,6 +1,6 @@
 # Coolcard Tokyo TCG ERP
 
-React + Tailwind 前端、Node.js + Express 後端、SQLite 資料庫的本機 MVP。
+React + Tailwind 前端、Node.js + Express 後端、PostgreSQL/Neon 資料庫的 MVP。
 
 ## 功能
 
@@ -32,7 +32,7 @@ npm run dev
 
 後端：http://localhost:4000
 
-SQLite 資料庫會自動建立在 `server/pokemon-card-erp.sqlite`，首次啟動會建立測試帳號、商品與銷售資料。
+後端會使用 `DATABASE_URL` 連線 PostgreSQL/Neon。首次啟動會自動建立 schema、執行 migration，並建立測試帳號、商品與銷售資料。
 
 ## 常用指令
 
@@ -57,7 +57,7 @@ npm run client
   - `JWT_EXPIRES_IN=7d`
   - `ADMIN_PASSWORD=<initial admin password>`
   - `CLERK_PASSWORD=<initial clerk password>`
-  - `DB_PATH=/opt/render/project/src/server/pokemon-card-erp.sqlite`
+  - `DATABASE_URL=<Neon PostgreSQL connection string>`
 
 ### Vercel 前端
 
@@ -68,4 +68,4 @@ npm run client
 - Environment variables:
   - `VITE_API_URL=https://your-render-service.onrender.com`
 
-Render 免費 Web Service 使用暫時性檔案系統；SQLite 適合 MVP 展示，但服務重啟、休眠或重新部署後資料可能重置。
+Render 後端透過 `DATABASE_URL` 使用 Neon PostgreSQL，資料不再依賴 Render 暫時性檔案系統。

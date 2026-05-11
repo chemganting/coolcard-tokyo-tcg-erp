@@ -3,7 +3,7 @@ import bcrypt from "bcryptjs";
 import express from "express";
 import jwt from "jsonwebtoken";
 import morgan from "morgan";
-import { db, toCamel } from "./db.js";
+import { initDb, pool, query, rowsToCamel, toCamel } from "./db.js";
 
 const app = express();
 const port = process.env.PORT ?? 4000;
@@ -34,23 +34,25 @@ app.use(cors({
     return callback(new Error("CORS origin not allowed"));
   }
 }));
-app.use(express.json());
+app.use(express.json({ limit: "2mb" }));
 app.use(morgan("dev"));
 
-function currentUser(request, response, next) {
+async function currentUser(request, response, next) {
   const auth = request.headers.authorization ?? "";
   const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
 
   try {
     const payload = jwt.verify(token, jwtSecret);
-    const row = db
-      .prepare("SELECT id, username, name, role FROM users WHERE id = ?")
-      .get(payload.sub);
+    const { rows } = await query("SELECT id, username, name, role FROM users WHERE id = $1", [payload.sub]);
+    const row = rows[0];
     if (!row) return response.status(401).json({ message: "請先登入" });
     request.user = publicUser(row);
     next();
-  } catch {
-    return response.status(401).json({ message: "請先登入" });
+  } catch (error) {
+    if (error.name === "JsonWebTokenError" || error.name === "TokenExpiredError") {
+      return response.status(401).json({ message: "請先登入" });
+    }
+    next(error);
   }
 }
 
@@ -90,99 +92,150 @@ function validateProduct(product) {
 }
 
 app.get("/api/health", (_request, response) => {
-  response.json({ ok: true });
+  response.json({ ok: true, database: "postgres" });
 });
 
-app.post("/api/login", (request, response) => {
+app.post("/api/login", async (request, response, next) => {
   const { username, password } = request.body;
-  const row = db
-    .prepare("SELECT id, username, password_hash, name, role FROM users WHERE username = ?")
-    .get(username);
+  try {
+    const { rows } = await query(
+      "SELECT id, username, password_hash, name, role FROM users WHERE username = $1",
+      [username]
+    );
+    const row = rows[0];
 
-  if (!row || !bcrypt.compareSync(String(password ?? ""), row.password_hash ?? "")) {
-    return response.status(401).json({ message: "帳號或密碼錯誤" });
+    if (!row || !bcrypt.compareSync(String(password ?? ""), row.password_hash ?? "")) {
+      return response.status(401).json({ message: "帳號或密碼錯誤" });
+    }
+
+    const user = publicUser(row);
+    const token = jwt.sign(
+      { sub: String(user.id), username: user.username, role: user.role },
+      jwtSecret,
+      { expiresIn: process.env.JWT_EXPIRES_IN ?? "7d" }
+    );
+    response.json({ token, user });
+  } catch (error) {
+    next(error);
   }
-
-  const user = publicUser({
-    id: row.id,
-    username: row.username,
-    name: row.name,
-    role: row.role
-  });
-  const token = jwt.sign(
-    { sub: String(user.id), username: user.username, role: user.role },
-    jwtSecret,
-    { expiresIn: process.env.JWT_EXPIRES_IN ?? "7d" }
-  );
-  response.json({ token, user });
 });
 
 app.get("/api/me", currentUser, (request, response) => {
   response.json(request.user);
 });
 
-app.get("/api/products", currentUser, (request, response) => {
+app.get("/api/products", currentUser, async (request, response, next) => {
   const keyword = `%${String(request.query.q ?? "").trim()}%`;
-  const rows = db
-    .prepare(`
-      SELECT id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost, price, stock, low_stock_threshold, notes, created_at, updated_at
-      FROM products
-      WHERE name LIKE ? OR series LIKE ? OR rarity LIKE ? OR condition LIKE ? OR unit LIKE ? OR package_spec LIKE ? OR notes LIKE ?
-      ORDER BY updated_at DESC, id DESC
-    `)
-    .all(keyword, keyword, keyword, keyword, keyword, keyword, keyword)
-    .map(toCamel);
-  response.json(rows);
+  try {
+    const { rows } = await query(
+      `
+        SELECT id, name, series, rarity, condition, unit, cards_per_unit, package_spec,
+               cost::float AS cost, price::float AS price, stock, low_stock_threshold, notes, created_at, updated_at
+        FROM products
+        WHERE name ILIKE $1 OR series ILIKE $1 OR rarity ILIKE $1 OR condition ILIKE $1
+           OR unit ILIKE $1 OR package_spec ILIKE $1 OR notes ILIKE $1
+        ORDER BY updated_at DESC, id DESC
+      `,
+      [keyword]
+    );
+    response.json(rowsToCamel(rows));
+  } catch (error) {
+    next(error);
+  }
 });
 
-app.post("/api/products", currentUser, requireAdmin, (request, response) => {
+app.post("/api/products", currentUser, requireAdmin, async (request, response, next) => {
   const product = productPayload(request.body);
   if (!validateProduct(product)) return response.status(400).json({ message: "商品資料不完整或格式錯誤" });
 
-  const result = db
-    .prepare(`
-      INSERT INTO products (name, series, rarity, condition, unit, cards_per_unit, package_spec, cost, price, stock, low_stock_threshold, notes)
-      VALUES (@name, @series, @rarity, @condition, @unit, @cardsPerUnit, @packageSpec, @cost, @price, @stock, @lowStockThreshold, @notes)
-    `)
-    .run(product);
-  response.status(201).json({ id: result.lastInsertRowid });
+  try {
+    const { rows } = await query(
+      `
+        INSERT INTO products
+          (name, series, rarity, condition, unit, cards_per_unit, package_spec, cost, price, stock, low_stock_threshold, notes)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        RETURNING id
+      `,
+      [
+        product.name,
+        product.series,
+        product.rarity,
+        product.condition,
+        product.unit,
+        product.cardsPerUnit,
+        product.packageSpec,
+        product.cost,
+        product.price,
+        product.stock,
+        product.lowStockThreshold,
+        product.notes
+      ]
+    );
+    response.status(201).json({ id: rows[0].id });
+  } catch (error) {
+    next(error);
+  }
 });
 
-app.put("/api/products/:id", currentUser, requireAdmin, (request, response) => {
+app.put("/api/products/:id", currentUser, requireAdmin, async (request, response, next) => {
   const product = productPayload(request.body);
   if (!validateProduct(product)) return response.status(400).json({ message: "商品資料不完整或格式錯誤" });
 
-  const result = db
-    .prepare(`
-      UPDATE products
-      SET name = @name,
-          series = @series,
-          rarity = @rarity,
-          condition = @condition,
-          unit = @unit,
-          cards_per_unit = @cardsPerUnit,
-          package_spec = @packageSpec,
-          cost = @cost,
-          price = @price,
-          stock = @stock,
-          low_stock_threshold = @lowStockThreshold,
-          notes = @notes,
-          updated_at = CURRENT_TIMESTAMP
-      WHERE id = @id
-    `)
-    .run({ ...product, id: Number(request.params.id) });
-
-  if (result.changes === 0) return response.status(404).json({ message: "商品不存在" });
-  response.json({ ok: true });
+  try {
+    const result = await query(
+      `
+        UPDATE products
+        SET name = $1,
+            series = $2,
+            rarity = $3,
+            condition = $4,
+            unit = $5,
+            cards_per_unit = $6,
+            package_spec = $7,
+            cost = $8,
+            price = $9,
+            stock = $10,
+            low_stock_threshold = $11,
+            notes = $12,
+            updated_at = NOW()
+        WHERE id = $13
+      `,
+      [
+        product.name,
+        product.series,
+        product.rarity,
+        product.condition,
+        product.unit,
+        product.cardsPerUnit,
+        product.packageSpec,
+        product.cost,
+        product.price,
+        product.stock,
+        product.lowStockThreshold,
+        product.notes,
+        Number(request.params.id)
+      ]
+    );
+    if (result.rowCount === 0) return response.status(404).json({ message: "商品不存在" });
+    response.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
 });
 
-app.delete("/api/products/:id", currentUser, requireAdmin, (request, response) => {
-  const saleCount = db.prepare("SELECT COUNT(*) AS count FROM sales WHERE product_id = ?").get(request.params.id).count;
-  if (saleCount > 0) return response.status(409).json({ message: "已有銷售紀錄的商品不可刪除" });
+app.delete("/api/products/:id", currentUser, requireAdmin, async (request, response, next) => {
+  try {
+    const saleCount = await query("SELECT COUNT(*)::int AS count FROM sales WHERE product_id = $1", [request.params.id]);
+    if (saleCount.rows[0].count > 0) {
+      return response.status(409).json({ message: "已有銷售紀錄的商品不可刪除" });
+    }
 
-  const result = db.prepare("DELETE FROM products WHERE id = ?").run(request.params.id);
-  if (result.changes === 0) return response.status(404).json({ message: "商品不存在" });
-  response.json({ ok: true });
+    const result = await query("DELETE FROM products WHERE id = $1", [request.params.id]);
+    if (result.rowCount === 0) return response.status(404).json({ message: "商品不存在" });
+    response.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
 });
 
 function parseCsv(text) {
@@ -239,27 +292,26 @@ function normalizeImportRows(body) {
   );
 }
 
-app.post("/api/products/import", currentUser, requireAdmin, (request, response) => {
+app.post("/api/products/import", currentUser, requireAdmin, async (request, response, next) => {
   const rows = normalizeImportRows(request.body);
   if (rows.length === 0) return response.status(400).json({ message: "沒有可匯入的資料" });
 
-  const insertProduct = db.prepare(`
-    INSERT INTO products (name, series, rarity, condition, unit, cards_per_unit, package_spec, cost, price, stock, low_stock_threshold, notes)
-    VALUES (@name, @series, @rarity, @condition, @unit, @cardsPerUnit, @packageSpec, @cost, @price, @stock, @lowStockThreshold, @notes)
-  `);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    let imported = 0;
 
-  const imported = db.transaction(() => {
-    let count = 0;
-    rows.forEach((row) => {
+    for (const row of rows) {
       const unit = String(importValue(row, ["單位", "unit"]) || "單張").trim();
+      const cardsPerUnit = importValue(row, ["每單位張數", "cardsPerUnit", "cards_per_unit"]) || 1;
       const product = productPayload({
         name: importValue(row, ["商品名稱", "name"]),
         series: importValue(row, ["卡牌系列", "series"]),
         rarity: importValue(row, ["稀有度", "rarity"]) || "未分類",
         condition: importValue(row, ["卡況", "condition"]) || "未標示",
         unit,
-        cardsPerUnit: importValue(row, ["每單位張數", "cardsPerUnit", "cards_per_unit"]) || 1,
-        packageSpec: importValue(row, ["包裝規格", "packageSpec", "package_spec"]) || `${importValue(row, ["每單位張數", "cardsPerUnit", "cards_per_unit"]) || 1} 張/${unit}`,
+        cardsPerUnit,
+        packageSpec: importValue(row, ["包裝規格", "packageSpec", "package_spec"]) || `${cardsPerUnit} 張/${unit}`,
         cost: importValue(row, ["進貨成本", "cost"]),
         price: importValue(row, ["售價", "price"]),
         stock: importValue(row, ["庫存數量", "stock"]),
@@ -267,58 +319,88 @@ app.post("/api/products/import", currentUser, requireAdmin, (request, response) 
         notes: importValue(row, ["備註", "notes"])
       });
 
-      if (!validateProduct(product)) return;
-      insertProduct.run(product);
-      count += 1;
-    });
-    return count;
-  })();
+      if (!validateProduct(product)) continue;
 
-  response.status(201).json({ imported });
+      await client.query(
+        `
+          INSERT INTO products
+            (name, series, rarity, condition, unit, cards_per_unit, package_spec, cost, price, stock, low_stock_threshold, notes)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        `,
+        [
+          product.name,
+          product.series,
+          product.rarity,
+          product.condition,
+          product.unit,
+          product.cardsPerUnit,
+          product.packageSpec,
+          product.cost,
+          product.price,
+          product.stock,
+          product.lowStockThreshold,
+          product.notes
+        ]
+      );
+      imported += 1;
+    }
+
+    await client.query("COMMIT");
+    response.status(201).json({ imported });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    next(error);
+  } finally {
+    client.release();
+  }
 });
 
-app.get("/api/sales", currentUser, (request, response) => {
+app.get("/api/sales", currentUser, async (request, response, next) => {
   const { from, to } = request.query;
   const params = [];
   const filters = [];
   if (from) {
-    filters.push("date(sales.sold_at) >= date(?)");
     params.push(from);
+    filters.push(`sales.sold_at >= $${params.length}::date`);
   }
   if (to) {
-    filters.push("date(sales.sold_at) <= date(?)");
     params.push(to);
+    filters.push(`sales.sold_at <= $${params.length}::date`);
   }
 
-  const rows = db
-    .prepare(`
-      SELECT
-        sales.id,
-        sales.quantity,
-        sales.sale_unit,
-        sales.cards_per_unit,
-        sales.unit_price,
-        sales.total,
-        sales.sold_at,
-        sales.created_at,
-        products.name AS product_name,
-        products.series AS product_series,
-        products.unit AS product_unit,
-        products.cards_per_unit AS product_cards_per_unit,
-        users.name AS staff_name,
-        users.role AS staff_role
-      FROM sales
-      JOIN products ON products.id = sales.product_id
-      JOIN users ON users.id = sales.user_id
-      ${filters.length ? `WHERE ${filters.join(" AND ")}` : ""}
-      ORDER BY date(sales.sold_at) DESC, sales.id DESC
-    `)
-    .all(...params)
-    .map(toCamel);
-  response.json(rows);
+  try {
+    const { rows } = await query(
+      `
+        SELECT
+          sales.id,
+          sales.quantity,
+          sales.sale_unit,
+          sales.cards_per_unit,
+          sales.unit_price::float AS unit_price,
+          sales.total::float AS total,
+          to_char(sales.sold_at, 'YYYY-MM-DD') AS sold_at,
+          sales.created_at,
+          products.name AS product_name,
+          products.series AS product_series,
+          products.unit AS product_unit,
+          products.cards_per_unit AS product_cards_per_unit,
+          users.name AS staff_name,
+          users.role AS staff_role
+        FROM sales
+        JOIN products ON products.id = sales.product_id
+        JOIN users ON users.id = sales.user_id
+        ${filters.length ? `WHERE ${filters.join(" AND ")}` : ""}
+        ORDER BY sales.sold_at DESC, sales.id DESC
+      `,
+      params
+    );
+    response.json(rowsToCamel(rows));
+  } catch (error) {
+    next(error);
+  }
 });
 
-app.post("/api/sales", currentUser, (request, response) => {
+app.post("/api/sales", currentUser, async (request, response, next) => {
   const productId = Number(request.body.productId);
   const quantity = Number(request.body.quantity);
   const unitPrice = Number(request.body.unitPrice);
@@ -330,74 +412,104 @@ app.post("/api/sales", currentUser, (request, response) => {
     return response.status(400).json({ message: "銷售資料不完整或格式錯誤" });
   }
 
-  const product = db.prepare("SELECT id, name, stock, unit, cards_per_unit FROM products WHERE id = ?").get(productId);
-  if (!product) return response.status(404).json({ message: "商品不存在" });
-  if (product.stock < quantity) {
-    return response.status(409).json({ message: `${product.name} 庫存不足，目前剩餘 ${product.stock}` });
-  }
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const productResult = await client.query(
+      "SELECT id, name, stock, unit, cards_per_unit FROM products WHERE id = $1 FOR UPDATE",
+      [productId]
+    );
+    const product = productResult.rows[0];
 
-  const transaction = db.transaction(() => {
+    if (!product) {
+      await client.query("ROLLBACK");
+      return response.status(404).json({ message: "商品不存在" });
+    }
+    if (product.stock < quantity) {
+      await client.query("ROLLBACK");
+      return response.status(409).json({ message: `${product.name} 庫存不足，目前剩餘 ${product.stock}` });
+    }
+
     const total = unitPrice * quantity;
-    const sale = db
-      .prepare(`
+    const sale = await client.query(
+      `
         INSERT INTO sales (product_id, user_id, quantity, sale_unit, cards_per_unit, unit_price, total, sold_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING id
+      `,
+      [productId, request.user.id, quantity, saleUnit, saleCardsPerUnit, unitPrice, total, soldAt]
+    );
+
+    await client.query("UPDATE products SET stock = stock - $1, updated_at = NOW() WHERE id = $2", [quantity, productId]);
+    await client.query("COMMIT");
+    response.status(201).json({ id: sale.rows[0].id });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+app.delete("/api/sales/:id", currentUser, requireAdmin, async (request, response, next) => {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const saleResult = await client.query("SELECT product_id, quantity FROM sales WHERE id = $1", [request.params.id]);
+    const sale = saleResult.rows[0];
+    if (!sale) {
+      await client.query("ROLLBACK");
+      return response.status(404).json({ message: "銷售紀錄不存在" });
+    }
+
+    await client.query("DELETE FROM sales WHERE id = $1", [request.params.id]);
+    await client.query("UPDATE products SET stock = stock + $1, updated_at = NOW() WHERE id = $2", [sale.quantity, sale.product_id]);
+    await client.query("COMMIT");
+    response.json({ ok: true });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+app.get("/api/dashboard", currentUser, async (_request, response, next) => {
+  try {
+    const [todayRevenue, monthRevenue, totalSalesQuantity, lowStockCount, totalStock, hotProducts, inventoryOverview] = await Promise.all([
+      query("SELECT COALESCE(SUM(total), 0)::float AS value FROM sales WHERE sold_at = CURRENT_DATE"),
+      query("SELECT COALESCE(SUM(total), 0)::float AS value FROM sales WHERE date_trunc('month', sold_at) = date_trunc('month', CURRENT_DATE)"),
+      query("SELECT COALESCE(SUM(quantity), 0)::int AS value FROM sales"),
+      query("SELECT COUNT(*)::int AS value FROM products WHERE stock <= low_stock_threshold"),
+      query("SELECT COALESCE(SUM(stock), 0)::int AS value FROM products"),
+      query(`
+        SELECT products.id, products.name, products.series, COALESCE(SUM(sales.quantity), 0)::int AS sold_quantity, COALESCE(SUM(sales.total), 0)::float AS revenue
+        FROM sales
+        JOIN products ON products.id = sales.product_id
+        GROUP BY products.id
+        ORDER BY sold_quantity DESC, revenue DESC
+        LIMIT 5
+      `),
+      query(`
+        SELECT id, name, series, rarity, unit, cards_per_unit, package_spec, stock, low_stock_threshold
+        FROM products
+        ORDER BY stock ASC, name ASC
+        LIMIT 8
       `)
-      .run(productId, request.user.id, quantity, saleUnit, saleCardsPerUnit, unitPrice, total, soldAt);
+    ]);
 
-    db.prepare("UPDATE products SET stock = stock - ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(quantity, productId);
-    return sale.lastInsertRowid;
-  });
-
-  response.status(201).json({ id: transaction() });
-});
-
-app.delete("/api/sales/:id", currentUser, requireAdmin, (request, response) => {
-  const sale = db.prepare("SELECT product_id, quantity FROM sales WHERE id = ?").get(request.params.id);
-  if (!sale) return response.status(404).json({ message: "銷售紀錄不存在" });
-
-  const transaction = db.transaction(() => {
-    db.prepare("DELETE FROM sales WHERE id = ?").run(request.params.id);
-    db.prepare("UPDATE products SET stock = stock + ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(sale.quantity, sale.product_id);
-  });
-  transaction();
-  response.json({ ok: true });
-});
-
-app.get("/api/dashboard", currentUser, (_request, response) => {
-  const todayRevenue = db
-    .prepare("SELECT COALESCE(SUM(total), 0) AS value FROM sales WHERE date(sold_at) = date('now', 'localtime')")
-    .get().value;
-  const monthRevenue = db
-    .prepare("SELECT COALESCE(SUM(total), 0) AS value FROM sales WHERE strftime('%Y-%m', sold_at) = strftime('%Y-%m', 'now', 'localtime')")
-    .get().value;
-  const totalSalesQuantity = db.prepare("SELECT COALESCE(SUM(quantity), 0) AS value FROM sales").get().value;
-  const lowStockCount = db.prepare("SELECT COUNT(*) AS value FROM products WHERE stock <= low_stock_threshold").get().value;
-  const totalStock = db.prepare("SELECT COALESCE(SUM(stock), 0) AS value FROM products").get().value;
-
-  const hotProducts = db
-    .prepare(`
-      SELECT products.id, products.name, products.series, COALESCE(SUM(sales.quantity), 0) AS sold_quantity, COALESCE(SUM(sales.total), 0) AS revenue
-      FROM sales
-      JOIN products ON products.id = sales.product_id
-      GROUP BY products.id
-      ORDER BY sold_quantity DESC, revenue DESC
-      LIMIT 5
-    `)
-    .all()
-    .map(toCamel);
-
-  const inventoryOverview = db
-    .prepare(`
-      SELECT id, name, series, rarity, unit, cards_per_unit, package_spec, stock, low_stock_threshold
-      FROM products
-      ORDER BY stock ASC, name ASC
-      LIMIT 8
-    `)
-    .all()
-    .map(toCamel);
-
-  response.json({ todayRevenue, monthRevenue, totalSalesQuantity, lowStockCount, totalStock, hotProducts, inventoryOverview });
+    response.json({
+      todayRevenue: todayRevenue.rows[0].value,
+      monthRevenue: monthRevenue.rows[0].value,
+      totalSalesQuantity: totalSalesQuantity.rows[0].value,
+      lowStockCount: lowStockCount.rows[0].value,
+      totalStock: totalStock.rows[0].value,
+      hotProducts: rowsToCamel(hotProducts.rows),
+      inventoryOverview: rowsToCamel(inventoryOverview.rows)
+    });
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.use((error, _request, response, _next) => {
@@ -405,6 +517,13 @@ app.use((error, _request, response, _next) => {
   response.status(500).json({ message: "伺服器發生錯誤" });
 });
 
-app.listen(port, "0.0.0.0", () => {
-  console.log(`Coolcard Tokyo TCG ERP API listening on http://localhost:${port}`);
-});
+initDb()
+  .then(() => {
+    app.listen(port, "0.0.0.0", () => {
+      console.log(`Coolcard Tokyo TCG ERP API listening on http://localhost:${port}`);
+    });
+  })
+  .catch((error) => {
+    console.error("Failed to initialize PostgreSQL database", error);
+    process.exit(1);
+  });

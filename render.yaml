@@ -18,5 +18,5 @@ services:
         sync: false
       - key: CLERK_PASSWORD
         sync: false
-      - key: DB_PATH
-        value: /opt/render/project/src/server/pokemon-card-erp.sqlite
+      - key: DATABASE_URL
+        sync: false
