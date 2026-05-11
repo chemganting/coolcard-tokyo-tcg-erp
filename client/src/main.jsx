@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
+  AlertTriangle,
   BarChart3,
   Boxes,
   CalendarDays,
@@ -247,6 +248,7 @@ function App() {
   const [dashboard, setDashboard] = useState(null);
   const [profitReport, setProfitReport] = useState(null);
   const [syncingSheet, setSyncingSheet] = useState(false);
+  const [clearingDemoData, setClearingDemoData] = useState(false);
   const [loading, setLoading] = useState(false);
   const [autoSaveStatus, setAutoSaveStatus] = useState("");
   const [undoing, setUndoing] = useState(false);
@@ -726,6 +728,30 @@ function App() {
       await load();
     } catch (err) {
       setError(err.message);
+    }
+  };
+
+  const clearDemoData = async () => {
+    const firstConfirm = window.confirm("危險操作：即將清除系統預設商品、庫存、銷售紀錄、報表資料與測試紀錄。admin、clerk、員工帳號與系統設定會保留。確定繼續？");
+    if (!firstConfirm) return;
+
+    const typed = window.prompt("二次確認：請輸入「清除測試資料」才可執行。");
+    if (typed !== "清除測試資料") {
+      if (typed !== null) window.alert("輸入內容不符，未執行清除。");
+      return;
+    }
+
+    setError("");
+    setClearingDemoData(true);
+    try {
+      const result = await api("/admin/clear-demo-data", { method: "POST", body: JSON.stringify({}) });
+      setQuickSaleItems([]);
+      await load();
+      window.alert(`測試資料已清除，執行前備份已建立：${result.backup?.filename ?? "已建立"}`);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setClearingDemoData(false);
     }
   };
 
@@ -1612,14 +1638,23 @@ function App() {
                   <Database className="h-5 w-5 text-slate-700" />
                   <h2 className="text-lg font-semibold">系統備份</h2>
                 </div>
-                <Button type="button" onClick={createBackup}>
-                  <Database className="h-4 w-4" />
-                  立即備份
-                </Button>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Button type="button" variant="danger" disabled={clearingDemoData} onClick={clearDemoData}>
+                    <AlertTriangle className="h-4 w-4" />
+                    {clearingDemoData ? "清除中..." : "清除測試資料"}
+                  </Button>
+                  <Button type="button" onClick={createBackup}>
+                    <Database className="h-4 w-4" />
+                    立即備份
+                  </Button>
+                </div>
               </div>
 
               <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
                 還原會覆蓋目前 PostgreSQL 資料庫中的員工、商品與銷售資料。備份檔只可透過管理員 API 操作，不提供公開下載。
+              </div>
+              <div className="mb-4 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">
+                清除測試資料會先自動建立備份，接著移除預設商品、庫存、銷售紀錄、報表資料與測試操作紀錄；不會清空 users 表或刪除 admin、clerk、員工帳號。
               </div>
 
               <div className="hidden overflow-x-auto lg:block">

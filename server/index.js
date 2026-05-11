@@ -633,6 +633,35 @@ async function restoreDatabaseBackup(filename) {
   }
 }
 
+async function tableExists(tableName) {
+  const { rowCount } = await query(
+    "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1",
+    [tableName]
+  );
+  return rowCount > 0;
+}
+
+async function clearDemoData() {
+  const backup = await createDatabaseBackup("manual");
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const tables = ["audit_logs", "sales", "products"];
+    if (await tableExists("inventory_logs")) tables.unshift("inventory_logs");
+
+    await client.query(`TRUNCATE TABLE ${tables.join(", ")} RESTART IDENTITY CASCADE`);
+    await client.query("COMMIT");
+    return { ok: true, backup, clearedTables: tables };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 function startScheduledBackups() {
   if (process.env.DISABLE_AUTO_BACKUP === "true") return;
   cron.schedule("0 3 * * *", async () => {
@@ -1583,6 +1612,15 @@ app.post("/api/backups/create", currentUser, requireAdmin, async (_request, resp
   try {
     const backup = await createDatabaseBackup("manual");
     response.status(201).json(backup);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/clear-demo-data", currentUser, requireAdmin, async (_request, response, next) => {
+  try {
+    const result = await clearDemoData();
+    response.json(result);
   } catch (error) {
     next(error);
   }
