@@ -470,7 +470,7 @@ function App() {
   const [deletedProductsOpen, setDeletedProductsOpen] = useState(false);
   const [auditOpen, setAuditOpen] = useState(false);
   const [inventoryOpen, setInventoryOpen] = useState(false);
-  const [importOpen, setImportOpen] = useState(false);
+  const [productCreateTab, setProductCreateTab] = useState("manual");
   const [auditLoaded, setAuditLoaded] = useState(false);
   const [auditLoading, setAuditLoading] = useState(false);
   const [inventoryFilters, setInventoryFilters] = useState({
@@ -853,6 +853,7 @@ function App() {
 
   const editProduct = (product) => {
     setEditingId(product.id);
+    setProductCreateTab("manual");
     productAutosaveReady.current = false;
     setProductForm({
       name: product.name,
@@ -1557,17 +1558,38 @@ function App() {
             </div>
 
             <div className="grid min-w-0 max-w-full gap-6 xl:grid-cols-[minmax(340px,35%)_minmax(0,65%)]">
-              <div className="grid min-w-0 gap-6">
-                <form onSubmit={submitProduct} className="min-w-0 rounded-xl border border-slate-200 bg-white shadow-sm lg:sticky lg:top-24 lg:max-h-[calc(100vh-8rem)] lg:overflow-hidden">
-                <div className="border-b border-slate-200 px-4 py-4">
-                  <div className="flex items-center gap-2">
-                    <PackagePlus className="h-5 w-5 text-slate-700" />
-                    <h3 className="text-base font-semibold">{editingId ? "編輯商品" : "新增商品"}</h3>
+              <div className="min-w-0">
+                <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm lg:sticky lg:top-24 lg:max-h-[calc(100vh-8rem)]">
+                  <div className="border-b border-slate-200 px-4 py-4">
+                    <div className="flex items-center gap-2">
+                      <PackagePlus className="h-5 w-5 text-slate-700" />
+                      <h3 className="text-base font-semibold">新增商品</h3>
+                    </div>
+                    {!isAdmin && <p className="mt-3 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-700">店員可查看庫存與新增銷售，但不能新增、編輯或刪除商品。</p>}
                   </div>
-                  {!isAdmin && <p className="mt-3 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-700">店員可查看庫存與新增銷售，但不能新增、編輯或刪除商品。</p>}
-                </div>
 
-                <div className="grid gap-5 px-4 py-4 lg:max-h-[calc(100vh-16rem)] lg:overflow-y-auto">
+                  <div className="grid gap-4 px-4 pt-4">
+                    <div className="grid grid-cols-2 rounded-lg border border-slate-200 bg-slate-50 p-1 text-sm font-medium">
+                      <button
+                        type="button"
+                        onClick={() => setProductCreateTab("manual")}
+                        className={`rounded-md px-3 py-2 transition ${productCreateTab === "manual" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"}`}
+                      >
+                        手動新增商品
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setProductCreateTab("import")}
+                        className={`rounded-md px-3 py-2 transition ${productCreateTab === "import" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"}`}
+                      >
+                        Excel / CSV 商品匯入
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="max-h-[calc(100vh-16rem)] overflow-y-auto px-4 pb-4 pt-4">
+                    {productCreateTab === "manual" ? (
+                      <form onSubmit={submitProduct} className="grid gap-5">
                   <section>
                     <h4 className="mb-3 text-sm font-semibold text-slate-700">基本資訊</h4>
                     <div className="grid gap-3 sm:grid-cols-2 sm:[grid-template-columns:repeat(2,minmax(0,1fr))]">
@@ -1689,44 +1711,27 @@ function App() {
                       </label>
                     </div>
                   </section>
-                </div>
-
-                <div className="sticky bottom-0 flex flex-col gap-3 border-t border-slate-200 bg-white px-4 py-4 sm:flex-row sm:gap-2">
-                  <Button disabled={!isAdmin} type="submit" className="w-full">
-                    <PackagePlus className="h-4 w-4" />
-                    {editingId ? "儲存變更" : "建立商品"}
-                  </Button>
-                  {editingId && <Button variant="secondary" type="button" className="w-full sm:w-auto" onClick={() => { setEditingId(null); setProductForm(emptyProduct); }}>取消</Button>}
-                </div>
-                </form>
-
-                {isAdmin && (
-                  <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-                    <button
-                      type="button"
-                      onClick={() => setImportOpen((current) => !current)}
-                      aria-expanded={importOpen}
-                      className="flex w-full items-center justify-between gap-3 px-4 py-4 text-left transition hover:bg-slate-50"
-                    >
-                      <div className="min-w-0">
-                        <h3 className="text-base font-semibold text-slate-950">Excel / CSV 商品匯入</h3>
-                        <p className="mt-1 text-sm text-slate-500">批次匯入商品資料，預設收合，不佔用主要版面。</p>
-                      </div>
-                      <ChevronDown className={`h-4 w-4 shrink-0 text-slate-500 transition-transform duration-300 ${importOpen ? "rotate-180" : ""}`} />
-                    </button>
-                    <div
-                      className="overflow-hidden transition-[max-height,opacity] duration-300 ease-out"
-                      style={{ maxHeight: importOpen ? "800px" : "0px", opacity: importOpen ? 1 : 0 }}
-                      aria-hidden={!importOpen}
-                    >
-                      <div className="border-t border-slate-200 p-4">
+                    <div className="flex flex-col gap-3 border-t border-slate-200 bg-white pt-4 sm:flex-row sm:gap-2">
+                      <Button disabled={!isAdmin} type="submit" className="w-full">
+                        <PackagePlus className="h-4 w-4" />
+                        {editingId ? "儲存變更" : "建立商品"}
+                      </Button>
+                      {editingId && <Button variant="secondary" type="button" className="w-full sm:w-auto" onClick={() => { setEditingId(null); setProductForm(emptyProduct); }}>取消</Button>}
+                    </div>
+                      </form>
+                    ) : (
+                      <section className="grid gap-4">
+                        <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+                          <p className="text-sm font-medium text-slate-900">Excel / CSV 商品匯入</p>
+                          <p className="mt-1 text-sm text-slate-500">批次匯入商品資料，支援 Excel 匯出的 CSV 檔案。</p>
+                        </div>
                         <TextArea
                           placeholder={"貼上 UTF-8 CSV 內容，欄位：商品名稱,系列,單位,包裝規格,成本,售價,庫存數量"}
                           value={importCsv}
                           onChange={(e) => setImportCsv(e.target.value)}
                         />
-                        <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                          <p className="text-sm text-slate-500">支援 Excel 匯出的 CSV。未填稀有度/卡況時會自動補預設值。</p>
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                          <p className="text-sm text-slate-500">未填稀有度/卡況時會自動補預設值。</p>
                           <div className="flex flex-col gap-2 sm:flex-row">
                             <label className="inline-flex h-12 cursor-pointer items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-base font-medium text-slate-700 transition hover:bg-slate-50 sm:h-10 sm:px-3 sm:text-sm">
                               選擇 CSV
@@ -1738,10 +1743,10 @@ function App() {
                             </Button>
                           </div>
                         </div>
-                      </div>
-                    </div>
-                  </section>
-                )}
+                      </section>
+                    )}
+                  </div>
+                </div>
               </div>
 
               <div className="min-w-0 max-w-full overflow-hidden rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
