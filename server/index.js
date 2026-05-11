@@ -1331,10 +1331,11 @@ function parseCsv(text) {
   let current = "";
   let row = [];
   let inQuotes = false;
+  const source = String(text ?? "").replace(/^\uFEFF/, "");
 
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index];
-    const next = text[index + 1];
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    const next = source[index + 1];
 
     if (char === "\"" && inQuotes && next === "\"") {
       current += "\"";
@@ -1355,9 +1356,52 @@ function parseCsv(text) {
     }
   }
 
+  if (inQuotes) {
+    const error = new Error("CSV 格式錯誤：引號未正確關閉");
+    error.statusCode = 400;
+    throw error;
+  }
+
   row.push(current.trim());
   if (row.some((cell) => cell !== "")) rows.push(row);
   return rows;
+}
+
+const importHeaderMap = {
+  商品名稱: "name",
+  name: "name",
+  成本: "cost",
+  進貨成本: "cost",
+  cost: "cost",
+  售價: "price",
+  price: "price",
+  庫存數量: "stock",
+  stock: "stock",
+  系列: "series",
+  卡牌系列: "series",
+  series: "series",
+  單位: "unit",
+  unit: "unit",
+  包裝規格: "packageSpec",
+  packageSpec: "packageSpec",
+  package_spec: "packageSpec",
+  稀有度: "rarity",
+  rarity: "rarity",
+  卡況: "condition",
+  condition: "condition",
+  每單位張數: "cardsPerUnit",
+  cardsPerUnit: "cardsPerUnit",
+  cards_per_unit: "cardsPerUnit",
+  低庫存門檻: "lowStockThreshold",
+  lowStockThreshold: "lowStockThreshold",
+  low_stock_threshold: "lowStockThreshold",
+  備註: "notes",
+  notes: "notes"
+};
+
+function normalizeImportHeader(header) {
+  const value = String(header ?? "").replace(/^\uFEFF/, "").trim();
+  return importHeaderMap[value] ?? value;
 }
 
 function importValue(row, names) {
@@ -1370,19 +1414,47 @@ function importValue(row, names) {
 
 function normalizeImportRows(body) {
   if (Array.isArray(body.rows)) return body.rows;
-  const csvText = String(body.csv ?? "").trim();
-  if (!csvText) return [];
+  const csvText = String(body.csv ?? "").replace(/^\uFEFF/, "").trim();
+  if (!csvText) {
+    const error = new Error("CSV 內容是空的");
+    error.statusCode = 400;
+    throw error;
+  }
 
   const rows = parseCsv(csvText);
-  const headers = rows.shift()?.map((header) => header.trim()) ?? [];
-  return rows.map((cells) =>
+  if (rows.length === 0) {
+    const error = new Error("CSV 沒有可讀取的資料列");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const headers = rows.shift()?.map(normalizeImportHeader) ?? [];
+  if (headers.length === 0 || headers.every((header) => header === "")) {
+    const error = new Error("CSV 缺少欄位標題");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const dataRows = rows.filter((cells) => cells.some((cell) => String(cell ?? "").trim() !== ""));
+  if (dataRows.length === 0) {
+    const error = new Error("CSV 只有欄位標題，沒有商品資料列");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  return dataRows.map((cells) =>
     Object.fromEntries(headers.map((header, index) => [header, cells[index] ?? ""]))
   );
 }
 
 app.post("/api/products/import", currentUser, requireAdmin, async (request, response, next) => {
-  const rows = normalizeImportRows(request.body);
-  if (rows.length === 0) return response.status(400).json({ message: "沒有可匯入的資料" });
+  let rows;
+  try {
+    rows = normalizeImportRows(request.body);
+  } catch (error) {
+    if (error.statusCode === 400) return response.status(400).json({ message: error.message });
+    return next(error);
+  }
 
   const client = await pool.connect();
   try {
@@ -1391,19 +1463,19 @@ app.post("/api/products/import", currentUser, requireAdmin, async (request, resp
 
     for (const row of rows) {
       const unit = String(importValue(row, ["單位", "unit"]) || "單張").trim();
-      const cardsPerUnit = importValue(row, ["每單位張數", "cardsPerUnit", "cards_per_unit"]) || 1;
+      const cardsPerUnit = importValue(row, ["cardsPerUnit", "每單位張數", "cards_per_unit"]) || 1;
       const product = productPayload({
-        name: importValue(row, ["商品名稱", "name"]),
-        series: importValue(row, ["卡牌系列", "series"]),
+        name: importValue(row, ["name", "商品名稱"]),
+        series: importValue(row, ["series", "系列", "卡牌系列"]),
         rarity: importValue(row, ["稀有度", "rarity"]) || "未分類",
         condition: importValue(row, ["卡況", "condition"]) || "未標示",
         unit,
         cardsPerUnit,
-        packageSpec: importValue(row, ["包裝規格", "packageSpec", "package_spec"]) || `${cardsPerUnit} 張/${unit}`,
-        cost: importValue(row, ["進貨成本", "cost"]),
-        price: importValue(row, ["售價", "price"]),
-        stock: importValue(row, ["庫存數量", "stock"]),
-        lowStockThreshold: importValue(row, ["低庫存門檻", "lowStockThreshold", "low_stock_threshold"]) || 3,
+        packageSpec: importValue(row, ["packageSpec", "包裝規格", "package_spec"]) || `${cardsPerUnit} 張/${unit}`,
+        cost: importValue(row, ["cost", "成本", "進貨成本"]),
+        price: importValue(row, ["price", "售價"]),
+        stock: importValue(row, ["stock", "庫存數量"]),
+        lowStockThreshold: importValue(row, ["lowStockThreshold", "低庫存門檻", "low_stock_threshold"]) || 3,
         notes: importValue(row, ["備註", "notes"])
       });
 
@@ -1435,8 +1507,13 @@ app.post("/api/products/import", currentUser, requireAdmin, async (request, resp
       imported += 1;
     }
 
+    if (imported === 0) {
+      await client.query("ROLLBACK");
+      return response.status(400).json({ message: `CSV 已讀取 ${rows.length} 筆，但沒有通過驗證的商品資料。請確認商品名稱、系列、成本、售價與庫存數量。` });
+    }
+
     await client.query("COMMIT");
-    response.status(201).json({ imported });
+    response.status(201).json({ imported, parsed: rows.length });
   } catch (error) {
     await client.query("ROLLBACK");
     next(error);
