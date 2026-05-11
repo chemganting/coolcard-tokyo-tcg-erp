@@ -211,6 +211,7 @@ function App() {
   const [productForm, setProductForm] = useState(emptyProduct);
   const [employeeForm, setEmployeeForm] = useState(emptyEmployee);
   const [editingEmployeeId, setEditingEmployeeId] = useState(null);
+  const [employeeDraft, setEmployeeDraft] = useState(null);
   const [passwordByUser, setPasswordByUser] = useState({});
   const [importCsv, setImportCsv] = useState("");
   const [editingId, setEditingId] = useState(null);
@@ -383,14 +384,10 @@ function App() {
         role: employeeForm.role,
         isActive: employeeForm.isActive
       };
-      if (editingEmployeeId) {
-        await api(`/users/${editingEmployeeId}`, { method: "PUT", body: JSON.stringify(payload) });
-      } else {
-        await api("/users", { method: "POST", body: JSON.stringify({ ...payload, password: employeeForm.password }) });
-      }
+      await api("/users", { method: "POST", body: JSON.stringify({ ...payload, password: employeeForm.password }) });
       setEmployeeForm(emptyEmployee);
-      setEditingEmployeeId(null);
       await load();
+      window.alert("員工帳號已建立");
     } catch (err) {
       setError(err.message);
     }
@@ -398,14 +395,40 @@ function App() {
 
   const editEmployee = (employee) => {
     setEditingEmployeeId(employee.id);
-    setEmployeeForm({
+    setEmployeeDraft({
       username: employee.username,
       name: employee.name,
       displayName: employee.displayName || employee.name,
       role: employee.role,
-      password: "",
       isActive: employee.isActive
     });
+  };
+
+  const cancelEmployeeEdit = () => {
+    setEditingEmployeeId(null);
+    setEmployeeDraft(null);
+  };
+
+  const saveEmployeeEdit = async (employee) => {
+    if (!employeeDraft) return;
+    setError("");
+    try {
+      await api(`/users/${employee.id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          username: employee.username,
+          name: employeeDraft.name,
+          displayName: employeeDraft.displayName || employeeDraft.name,
+          role: employeeDraft.role,
+          isActive: employee.isActive
+        })
+      });
+      cancelEmployeeEdit();
+      await load();
+      window.alert("員工資料已更新");
+    } catch (err) {
+      setError(err.message);
+    }
   };
 
   const updateEmployeePassword = async (employee) => {
@@ -856,12 +879,11 @@ function App() {
               <form onSubmit={submitEmployee} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
                 <div className="mb-4 flex items-center gap-2">
                   <UserRound className="h-5 w-5 text-slate-700" />
-                  <h2 className="text-lg font-semibold">{editingEmployeeId ? "編輯員工" : "新增員工"}</h2>
+                  <h2 className="text-lg font-semibold">新增員工</h2>
                 </div>
                 <div className="grid gap-3">
                   <TextInput
                     required
-                    disabled={Boolean(editingEmployeeId)}
                     placeholder="username"
                     value={employeeForm.username}
                     onChange={(e) => setEmployeeForm({ ...employeeForm, username: e.target.value })}
@@ -882,16 +904,14 @@ function App() {
                     <option value="admin">admin</option>
                     <option value="clerk">clerk</option>
                   </SelectInput>
-                  {!editingEmployeeId && (
-                    <TextInput
-                      required
-                      type="password"
-                      minLength="6"
-                      placeholder="初始密碼，至少 6 碼"
-                      value={employeeForm.password}
-                      onChange={(e) => setEmployeeForm({ ...employeeForm, password: e.target.value })}
-                    />
-                  )}
+                  <TextInput
+                    required
+                    type="password"
+                    minLength="6"
+                    placeholder="初始密碼，至少 6 碼"
+                    value={employeeForm.password}
+                    onChange={(e) => setEmployeeForm({ ...employeeForm, password: e.target.value })}
+                  />
                   <label className="flex items-center gap-2 text-sm text-slate-700">
                     <input
                       type="checkbox"
@@ -901,19 +921,7 @@ function App() {
                     啟用帳號
                   </label>
                   <div className="flex gap-2">
-                    <Button type="submit">{editingEmployeeId ? "儲存員工" : "建立員工"}</Button>
-                    {editingEmployeeId && (
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        onClick={() => {
-                          setEditingEmployeeId(null);
-                          setEmployeeForm(emptyEmployee);
-                        }}
-                      >
-                        取消
-                      </Button>
-                    )}
+                    <Button type="submit">建立員工</Button>
                   </div>
                 </div>
               </form>
@@ -938,48 +946,94 @@ function App() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {employees.map((employee) => (
-                        <tr key={employee.id}>
-                          <td className="py-3 pr-4 font-mono text-xs">{employee.username}</td>
-                          <td className="py-3 pr-4">{employee.name}</td>
-                          <td className="py-3 pr-4">{employee.displayName}</td>
-                          <td className="py-3 pr-4">
-                            <span className="rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">{employee.role}</span>
-                          </td>
-                          <td className="py-3 pr-4">
-                            <span className={`rounded px-2 py-1 text-xs font-medium ${employee.isActive ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}>
-                              {employee.isActive ? "啟用" : "停用"}
-                            </span>
-                          </td>
-                          <td className="py-3 pr-4">{new Date(employee.createdAt).toLocaleDateString("zh-TW")}</td>
-                          <td className="py-3 pr-4">{new Date(employee.updatedAt).toLocaleDateString("zh-TW")}</td>
-                          <td className="py-3">
-                            <div className="flex flex-wrap gap-2">
-                              <Button type="button" variant="secondary" onClick={() => editEmployee(employee)}>
-                                <Edit3 className="h-4 w-4" />
-                              </Button>
-                              <Button type="button" variant="secondary" onClick={() => toggleEmployeeStatus(employee)}>
-                                {employee.isActive ? "停用" : "啟用"}
-                              </Button>
-                              <Button type="button" variant="danger" disabled={employee.id === auth.user.id} onClick={() => deleteEmployee(employee)}>
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
-                            </div>
-                            <div className="mt-2 flex gap-2">
-                              <TextInput
-                                type="password"
-                                minLength="6"
-                                placeholder="新密碼"
-                                value={passwordByUser[employee.id] ?? ""}
-                                onChange={(e) => setPasswordByUser((current) => ({ ...current, [employee.id]: e.target.value }))}
-                              />
-                              <Button type="button" variant="secondary" onClick={() => updateEmployeePassword(employee)}>
-                                改密碼
-                              </Button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
+                      {employees.map((employee) => {
+                        const isEditingEmployee = editingEmployeeId === employee.id;
+                        return (
+                          <tr key={employee.id}>
+                            <td className="py-3 pr-4 font-mono text-xs">{employee.username}</td>
+                            <td className="py-3 pr-4">
+                              {isEditingEmployee ? (
+                                <TextInput
+                                  required
+                                  value={employeeDraft?.name ?? ""}
+                                  onChange={(e) => setEmployeeDraft((current) => ({ ...current, name: e.target.value }))}
+                                />
+                              ) : (
+                                employee.name
+                              )}
+                            </td>
+                            <td className="py-3 pr-4">
+                              {isEditingEmployee ? (
+                                <TextInput
+                                  required
+                                  value={employeeDraft?.displayName ?? ""}
+                                  onChange={(e) => setEmployeeDraft((current) => ({ ...current, displayName: e.target.value }))}
+                                />
+                              ) : (
+                                employee.displayName
+                              )}
+                            </td>
+                            <td className="py-3 pr-4">
+                              {isEditingEmployee ? (
+                                <SelectInput
+                                  value={employeeDraft?.role ?? "clerk"}
+                                  onChange={(e) => setEmployeeDraft((current) => ({ ...current, role: e.target.value }))}
+                                >
+                                  <option value="admin">admin</option>
+                                  <option value="clerk">clerk</option>
+                                </SelectInput>
+                              ) : (
+                                <span className="rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">{employee.role}</span>
+                              )}
+                            </td>
+                            <td className="py-3 pr-4">
+                              <span className={`rounded px-2 py-1 text-xs font-medium ${employee.isActive ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}>
+                                {employee.isActive ? "啟用" : "停用"}
+                              </span>
+                            </td>
+                            <td className="py-3 pr-4">{new Date(employee.createdAt).toLocaleDateString("zh-TW")}</td>
+                            <td className="py-3 pr-4">{new Date(employee.updatedAt).toLocaleDateString("zh-TW")}</td>
+                            <td className="py-3">
+                              {isEditingEmployee ? (
+                                <div className="flex flex-wrap gap-2">
+                                  <Button type="button" onClick={() => saveEmployeeEdit(employee)}>
+                                    儲存
+                                  </Button>
+                                  <Button type="button" variant="secondary" onClick={cancelEmployeeEdit}>
+                                    取消
+                                  </Button>
+                                </div>
+                              ) : (
+                                <>
+                                  <div className="flex flex-wrap gap-2">
+                                    <Button type="button" variant="secondary" onClick={() => editEmployee(employee)}>
+                                      <Edit3 className="h-4 w-4" />
+                                    </Button>
+                                    <Button type="button" variant="secondary" onClick={() => toggleEmployeeStatus(employee)}>
+                                      {employee.isActive ? "停用" : "啟用"}
+                                    </Button>
+                                    <Button type="button" variant="danger" disabled={employee.id === auth.user.id} onClick={() => deleteEmployee(employee)}>
+                                      <Trash2 className="h-4 w-4" />
+                                    </Button>
+                                  </div>
+                                  <div className="mt-2 flex gap-2">
+                                    <TextInput
+                                      type="password"
+                                      minLength="6"
+                                      placeholder="新密碼"
+                                      value={passwordByUser[employee.id] ?? ""}
+                                      onChange={(e) => setPasswordByUser((current) => ({ ...current, [employee.id]: e.target.value }))}
+                                    />
+                                    <Button type="button" variant="secondary" onClick={() => updateEmployeePassword(employee)}>
+                                      改密碼
+                                    </Button>
+                                  </div>
+                                </>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
