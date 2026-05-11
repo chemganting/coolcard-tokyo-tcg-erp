@@ -369,11 +369,12 @@ async function backupFilePath(filename) {
 }
 
 async function getDashboardSnapshot() {
-  const [todayRevenue, monthRevenue, totalSalesQuantity, lowStockCount, totalStock, hotProducts, inventoryOverview] = await Promise.all([
+  const [todayRevenue, monthRevenue, totalSalesQuantity, lowStockCount, totalProductCount, totalStock, hotProducts, inventoryOverview] = await Promise.all([
     query("SELECT COALESCE(SUM(total), 0)::float AS value FROM sales WHERE sold_at = CURRENT_DATE AND voided_at IS NULL"),
     query("SELECT COALESCE(SUM(total), 0)::float AS value FROM sales WHERE date_trunc('month', sold_at) = date_trunc('month', CURRENT_DATE) AND voided_at IS NULL"),
     query("SELECT COALESCE(SUM(quantity), 0)::int AS value FROM sales WHERE voided_at IS NULL"),
     query("SELECT COUNT(*)::int AS value FROM products WHERE deleted_at IS NULL AND stock <= low_stock_threshold"),
+    query("SELECT COUNT(*)::int AS value FROM products WHERE deleted_at IS NULL"),
     query("SELECT COALESCE(SUM(stock), 0)::int AS value FROM products WHERE deleted_at IS NULL"),
     query(`
       SELECT products.id, products.name, products.series, COALESCE(SUM(sales.quantity), 0)::int AS sold_quantity, COALESCE(SUM(sales.total), 0)::float AS revenue
@@ -387,7 +388,7 @@ async function getDashboardSnapshot() {
     query(`
       SELECT id, name, series, rarity, unit, cards_per_unit, package_spec, stock, low_stock_threshold
       FROM products
-      WHERE deleted_at IS NULL
+      WHERE deleted_at IS NULL AND stock <= low_stock_threshold
       ORDER BY stock ASC, name ASC
       LIMIT 8
     `)
@@ -398,6 +399,7 @@ async function getDashboardSnapshot() {
     monthRevenue: monthRevenue.rows[0].value,
     totalSalesQuantity: totalSalesQuantity.rows[0].value,
     lowStockCount: lowStockCount.rows[0].value,
+    totalProductCount: totalProductCount.rows[0].value,
     totalStock: totalStock.rows[0].value,
     hotProducts: rowsToCamel(hotProducts.rows),
     inventoryOverview: rowsToCamel(inventoryOverview.rows)
@@ -1813,11 +1815,12 @@ app.post("/api/undo", currentUser, async (request, response, next) => {
 
 app.get("/api/dashboard", currentUser, async (_request, response, next) => {
   try {
-    const [todayRevenue, monthRevenue, totalSalesQuantity, lowStockCount, totalStock, hotProducts, inventoryOverview] = await Promise.all([
+    const [todayRevenue, monthRevenue, totalSalesQuantity, lowStockCount, totalProductCount, totalStock, hotProducts, inventoryOverview] = await Promise.all([
       query("SELECT COALESCE(SUM(total), 0)::float AS value FROM sales WHERE sold_at = CURRENT_DATE AND voided_at IS NULL"),
       query("SELECT COALESCE(SUM(total), 0)::float AS value FROM sales WHERE date_trunc('month', sold_at) = date_trunc('month', CURRENT_DATE) AND voided_at IS NULL"),
       query("SELECT COALESCE(SUM(quantity), 0)::int AS value FROM sales WHERE voided_at IS NULL"),
       query("SELECT COUNT(*)::int AS value FROM products WHERE deleted_at IS NULL AND stock <= low_stock_threshold"),
+      query("SELECT COUNT(*)::int AS value FROM products WHERE deleted_at IS NULL"),
       query("SELECT COALESCE(SUM(stock), 0)::int AS value FROM products WHERE deleted_at IS NULL"),
       query(`
         SELECT products.id, products.name, products.series, COALESCE(SUM(sales.quantity), 0)::int AS sold_quantity, COALESCE(SUM(sales.total), 0)::float AS revenue
@@ -1831,7 +1834,7 @@ app.get("/api/dashboard", currentUser, async (_request, response, next) => {
       query(`
         SELECT id, name, series, rarity, unit, cards_per_unit, package_spec, stock, low_stock_threshold
         FROM products
-        WHERE deleted_at IS NULL
+        WHERE deleted_at IS NULL AND stock <= low_stock_threshold
         ORDER BY stock ASC, name ASC
         LIMIT 8
       `)
@@ -1842,6 +1845,7 @@ app.get("/api/dashboard", currentUser, async (_request, response, next) => {
       monthRevenue: monthRevenue.rows[0].value,
       totalSalesQuantity: totalSalesQuantity.rows[0].value,
       lowStockCount: lowStockCount.rows[0].value,
+      totalProductCount: totalProductCount.rows[0].value,
       totalStock: totalStock.rows[0].value,
       hotProducts: rowsToCamel(hotProducts.rows),
       inventoryOverview: rowsToCamel(inventoryOverview.rows)

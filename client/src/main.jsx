@@ -45,6 +45,7 @@ function authFromStorage() {
 const API_BASE_URL = (import.meta.env.VITE_API_URL ?? "").replace(/\/$/, "");
 const APP_NAME = "Coolcard Tokyo TCG ERP";
 const UNIT_OPTIONS = ["單張", "包", "盒", "箱", "組", "其他"];
+const PRODUCT_PAGE_SIZE = 20;
 
 function formatStock(product) {
   return `${number.format(product.stock ?? 0)} ${product.unit ?? "單張"}`;
@@ -256,8 +257,10 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [autoSaveStatus, setAutoSaveStatus] = useState("");
   const [undoing, setUndoing] = useState(false);
-  const [query, setQuery] = useState("");
   const [searchInput, setSearchInput] = useState("");
+  const [unitFilter, setUnitFilter] = useState("全部");
+  const [stockSort, setStockSort] = useState("asc");
+  const [productPage, setProductPage] = useState(1);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [quickSaleItems, setQuickSaleItems] = useState([]);
   const [error, setError] = useState("");
@@ -304,7 +307,7 @@ function App() {
     const saleQuery = `?from=${dateRange.from}&to=${dateRange.to}`;
     try {
       const [productRows, deletedProductRows, saleRows, dashboardRow, profitRow, employeeRows, backupRows] = await Promise.all([
-        api(`/products?q=${encodeURIComponent(query)}`),
+        api("/products"),
         isAdmin ? api("/products/deleted").catch(() => []) : Promise.resolve([]),
         api(`/sales${saleQuery}`),
         api("/dashboard"),
@@ -346,12 +349,7 @@ function App() {
 
   useEffect(() => {
     load().catch((err) => setError(err.message));
-  }, [auth, query, dateRange.from, dateRange.to]);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => setQuery(searchInput), 300);
-    return () => window.clearTimeout(timer);
-  }, [searchInput]);
+  }, [auth, dateRange.from, dateRange.to]);
 
   useEffect(() => {
     if (!saleForm.productId && products[0]) {
@@ -369,7 +367,25 @@ function App() {
     () => products.find((product) => product.id === Number(saleForm.productId)),
     [products, saleForm.productId]
   );
-  const visibleProducts = useMemo(() => products.slice(0, 80), [products]);
+  const productUnitOptions = useMemo(() => ["全部", ...Array.from(new Set(products.map((product) => product.unit).filter(Boolean)))], [products]);
+  const filteredProducts = useMemo(() => {
+    const keyword = searchInput.trim().toLowerCase();
+    return products
+      .filter((product) => {
+        const matchesKeyword = !keyword ||
+          String(product.name ?? "").toLowerCase().includes(keyword) ||
+          String(product.series ?? "").toLowerCase().includes(keyword);
+        const matchesUnit = unitFilter === "全部" || product.unit === unitFilter;
+        return matchesKeyword && matchesUnit;
+      })
+      .sort((a, b) => stockSort === "asc" ? a.stock - b.stock : b.stock - a.stock);
+  }, [products, searchInput, unitFilter, stockSort]);
+  const productPageCount = Math.max(1, Math.ceil(filteredProducts.length / PRODUCT_PAGE_SIZE));
+  const currentProductPage = Math.min(productPage, productPageCount);
+  const visibleProducts = useMemo(() => {
+    const start = (currentProductPage - 1) * PRODUCT_PAGE_SIZE;
+    return filteredProducts.slice(start, start + PRODUCT_PAGE_SIZE);
+  }, [filteredProducts, currentProductPage]);
   const quickSaleProducts = useMemo(() => products.filter((product) => product.stock > 0).slice(0, 12), [products]);
   const quickSaleTotal = useMemo(
     () => quickSaleItems.reduce((sum, item) => sum + item.quantity * Number(item.product.price || 0), 0),
@@ -378,6 +394,14 @@ function App() {
   const latestAuditTime = auditLogs[0]?.createdAt
     ? new Date(auditLogs[0].createdAt).toLocaleString("zh-TW")
     : (auditLoaded ? "尚無紀錄" : "尚未載入");
+
+  useEffect(() => {
+    setProductPage(1);
+  }, [searchInput, unitFilter, stockSort]);
+
+  useEffect(() => {
+    if (productPage > productPageCount) setProductPage(productPageCount);
+  }, [productPage, productPageCount]);
 
   useEffect(() => {
     if (!editingId) return undefined;
@@ -615,6 +639,10 @@ function App() {
     } finally {
       event.target.value = "";
     }
+  };
+
+  const showAllProducts = () => {
+    document.getElementById("商品庫存")?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
   const voidSale = async (sale) => {
@@ -1040,9 +1068,26 @@ function App() {
             </div>
 
             <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="mb-4 flex items-center gap-2">
-                <Warehouse className="h-5 w-5 text-slate-700" />
-                <h2 className="text-lg font-semibold">商品庫存總覽</h2>
+              <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-center gap-2">
+                  <Warehouse className="h-5 w-5 text-slate-700" />
+                  <h2 className="text-lg font-semibold">商品庫存總覽</h2>
+                </div>
+                <Button type="button" variant="secondary" onClick={showAllProducts}>
+                  <Boxes className="h-4 w-4" />
+                  查看全部商品
+                </Button>
+              </div>
+              <div className="mb-4 grid gap-2 sm:grid-cols-3">
+                <div className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-600">
+                  商品總數 <span className="font-semibold text-slate-950">{number.format(dashboard?.totalProductCount ?? 0)}</span>
+                </div>
+                <div className="rounded-md bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                  低庫存商品數 <span className="font-semibold">{number.format(dashboard?.lowStockCount ?? 0)}</span>
+                </div>
+                <div className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-600">
+                  目前顯示前 <span className="font-semibold text-slate-950">{number.format((dashboard?.inventoryOverview ?? []).length)}</span> 筆
+                </div>
               </div>
               <div className="grid gap-3 sm:grid-cols-2">
                 {(dashboard?.inventoryOverview ?? []).map((product) => (
@@ -1162,16 +1207,28 @@ function App() {
 
               <div className="min-w-0 max-w-full overflow-hidden rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
                 <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <h3 className="font-semibold text-slate-900">商品列表</h3>
-                  <div className="sticky top-[92px] z-20 w-full min-w-0 bg-white py-1 sm:static sm:max-w-sm sm:flex-1 sm:bg-transparent sm:py-0">
+                  <div>
+                    <h3 className="font-semibold text-slate-900">完整商品列表</h3>
+                    <p className="mt-1 text-sm text-slate-500">共 {number.format(filteredProducts.length)} 筆，顯示第 {number.format(currentProductPage)} / {number.format(productPageCount)} 頁</p>
+                  </div>
+                </div>
+                <div className="mb-4 grid gap-3 lg:grid-cols-[minmax(220px,1fr)_180px_180px]">
+                  <div className="relative min-w-0">
                     <Search className="pointer-events-none absolute left-3 top-2.5 h-5 w-5 text-slate-400" />
                     <input
                       value={searchInput}
                       onChange={(event) => setSearchInput(event.target.value)}
-                      placeholder="搜尋商品、系列、稀有度、編號"
+                      placeholder="搜尋商品名稱或系列"
                       className="h-12 w-full rounded-md border border-slate-300 bg-white pl-10 pr-3 text-base outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-100 sm:h-10 sm:text-sm"
                     />
                   </div>
+                  <SelectInput value={unitFilter} onChange={(event) => setUnitFilter(event.target.value)}>
+                    {productUnitOptions.map((unit) => <option key={unit} value={unit}>{unit === "全部" ? "全部單位" : unit}</option>)}
+                  </SelectInput>
+                  <SelectInput value={stockSort} onChange={(event) => setStockSort(event.target.value)}>
+                    <option value="asc">庫存由低到高</option>
+                    <option value="desc">庫存由高到低</option>
+                  </SelectInput>
                 </div>
 
                 <div className="hidden overflow-x-auto lg:block">
@@ -1218,6 +1275,11 @@ function App() {
                           </td>
                         </tr>
                       ))}
+                      {visibleProducts.length === 0 && (
+                        <tr>
+                          <td className="py-6 text-center text-slate-500" colSpan="10">沒有符合條件的商品</td>
+                        </tr>
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -1252,6 +1314,19 @@ function App() {
                       </div>
                     </article>
                   ))}
+                  {visibleProducts.length === 0 && <p className="py-6 text-center text-slate-500">沒有符合條件的商品</p>}
+                </div>
+                <div className="mt-4 flex flex-col gap-3 border-t border-slate-200 pt-4 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-sm text-slate-500">每頁 {PRODUCT_PAGE_SIZE} 筆，目前顯示 {number.format(visibleProducts.length)} 筆</p>
+                  <div className="flex items-center gap-2">
+                    <Button type="button" variant="secondary" disabled={productPage <= 1} onClick={() => setProductPage((page) => Math.max(1, page - 1))}>
+                      上一頁
+                    </Button>
+                    <span className="min-w-20 text-center text-sm text-slate-600">{currentProductPage} / {productPageCount}</span>
+                    <Button type="button" variant="secondary" disabled={productPage >= productPageCount} onClick={() => setProductPage((page) => Math.min(productPageCount, page + 1))}>
+                      下一頁
+                    </Button>
+                  </div>
                 </div>
               </div>
             </div>
