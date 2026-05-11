@@ -46,6 +46,93 @@ const API_BASE_URL = (import.meta.env.VITE_API_URL ?? "").replace(/\/$/, "");
 const APP_NAME = "Coolcard Tokyo TCG ERP";
 const UNIT_OPTIONS = ["單張", "包", "盒", "箱", "組", "其他"];
 const PRODUCT_PAGE_SIZE = 20;
+const WAKE_MESSAGE = "伺服器喚醒中，首次開啟約需 30–60 秒，請稍候";
+const WAKE_NOTICE_DELAY = 5000;
+const HEALTH_RETRY_DELAY = 2500;
+const wakeListeners = new Set();
+
+function notifyWakeListeners(isWaking) {
+  for (const listener of wakeListeners) listener(isWaking);
+}
+
+function subscribeWakeListener(listener) {
+  wakeListeners.add(listener);
+  return () => wakeListeners.delete(listener);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function waitForBackendHealth() {
+  while (true) {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/health`, { cache: "no-store" });
+      if (response.ok) return;
+    } catch {
+      // Keep retrying while the backend is waking.
+    }
+    await sleep(HEALTH_RETRY_DELAY);
+  }
+}
+
+async function fetchWithWake(path, options = {}) {
+  const target = `${API_BASE_URL}/api${path}`;
+  let wakeStarted = false;
+  const shouldRetryAfterWake = (response) => [502, 503, 504, 521, 522, 523, 524].includes(response.status);
+  let wakeResolved;
+  const wakeSignal = new Promise((resolve) => {
+    wakeResolved = resolve;
+  });
+  const wakeTimer = window.setTimeout(() => {
+    wakeStarted = true;
+    notifyWakeListeners(true);
+    waitForBackendHealth()
+      .then(() => {
+        notifyWakeListeners(false);
+        wakeResolved();
+      });
+  }, WAKE_NOTICE_DELAY);
+
+  try {
+    const request = fetch(target, options)
+      .then((response) => ({ type: "response", response }))
+      .catch((error) => ({ type: "error", error }));
+    const result = await Promise.race([
+      request,
+      wakeSignal.then(() => ({ type: "healthy" }))
+    ]);
+
+    if (result.type === "healthy") {
+      window.clearTimeout(wakeTimer);
+      return fetch(target, options);
+    }
+
+    window.clearTimeout(wakeTimer);
+    if (result.type === "error") throw result.error;
+
+    const { response } = result;
+    if (shouldRetryAfterWake(response)) {
+      wakeStarted = true;
+      notifyWakeListeners(true);
+      await waitForBackendHealth();
+      notifyWakeListeners(false);
+      return fetch(target, options);
+    }
+    if (wakeStarted) {
+      await waitForBackendHealth();
+      notifyWakeListeners(false);
+    }
+    return response;
+  } catch (error) {
+    window.clearTimeout(wakeTimer);
+    wakeStarted = true;
+    notifyWakeListeners(true);
+    await waitForBackendHealth();
+    notifyWakeListeners(false);
+    return fetch(target, options);
+  }
+}
 
 function formatStock(product) {
   return `${number.format(product.stock ?? 0)} ${product.unit ?? "單張"}`;
@@ -74,7 +161,7 @@ const entityLabels = {
 
 async function api(path, options = {}) {
   const auth = authFromStorage();
-  const response = await fetch(`${API_BASE_URL}/api${path}`, {
+  const response = await fetchWithWake(path, {
     ...options,
     headers: {
       "Content-Type": "application/json",
@@ -161,6 +248,20 @@ function SkeletonCard() {
   );
 }
 
+function WakeNotice() {
+  return (
+    <div className="fixed inset-0 z-[80] grid place-items-center bg-slate-100/90 px-4 backdrop-blur-sm">
+      <section className="w-full max-w-md rounded-lg border border-amber-200 bg-white p-5 text-center shadow-lg">
+        <div className="mx-auto mb-3 grid h-12 w-12 place-items-center rounded-lg bg-amber-50 text-amber-700">
+          <Database className="h-6 w-6" />
+        </div>
+        <p className="text-base font-semibold text-slate-950">{WAKE_MESSAGE}</p>
+        <p className="mt-2 text-sm text-slate-500">系統會自動重新連線，不需要重新整理頁面。</p>
+      </section>
+    </div>
+  );
+}
+
 const emptyProduct = {
   name: "",
   series: "",
@@ -193,13 +294,9 @@ function Login({ onLogin }) {
     event.preventDefault();
     setError("");
     try {
-      const result = await fetch(`${API_BASE_URL}/api/login`, {
+      const result = await api("/login", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(form)
-      }).then(async (response) => {
-        if (!response.ok) throw new Error((await response.json()).message);
-        return response.json();
       });
       localStorage.setItem("pokemon-erp-auth", JSON.stringify(result));
       onLogin(result);
@@ -241,6 +338,8 @@ function Login({ onLogin }) {
 
 function App() {
   const [auth, setAuth] = useState(authFromStorage());
+  const [backendReady, setBackendReady] = useState(false);
+  const [wakingBackend, setWakingBackend] = useState(false);
   const [products, setProducts] = useState([]);
   const [deletedProducts, setDeletedProducts] = useState([]);
   const [sales, setSales] = useState([]);
@@ -285,6 +384,22 @@ function App() {
     [History, "操作紀錄"],
     ...(isAdmin ? [[UserRound, "員工管理"], [Database, "系統備份"]] : [])
   ]), [isAdmin]);
+
+  useEffect(() => subscribeWakeListener(setWakingBackend), []);
+
+  useEffect(() => {
+    let cancelled = false;
+    api("/health")
+      .then(() => {
+        if (!cancelled) setBackendReady(true);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err.message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!auth?.token) return;
@@ -856,10 +971,36 @@ function App() {
     setAuth(null);
   };
 
-  if (!auth?.token) return <Login onLogin={setAuth} />;
+  if (!backendReady) {
+    return (
+      <>
+        {wakingBackend && <WakeNotice />}
+        {!wakingBackend && (
+          <main className="grid min-h-screen place-items-center bg-slate-100 px-4">
+            <section className="w-full max-w-md rounded-lg border border-slate-200 bg-white p-6 text-center shadow-sm">
+              <div className="mx-auto mb-3 grid h-12 w-12 place-items-center rounded-lg bg-teal-50 text-teal-700">
+                <Database className="h-6 w-6" />
+              </div>
+              <p className="font-semibold text-slate-950">正在連線伺服器</p>
+            </section>
+          </main>
+        )}
+      </>
+    );
+  }
+
+  if (!auth?.token) {
+    return (
+      <>
+        {wakingBackend && <WakeNotice />}
+        <Login onLogin={setAuth} />
+      </>
+    );
+  }
 
   return (
     <div className="min-h-screen overflow-x-hidden bg-slate-100 pb-44 text-slate-900 lg:pb-0">
+      {wakingBackend && <WakeNotice />}
       <aside className="fixed inset-y-0 left-0 hidden w-64 border-r border-slate-200 bg-white px-5 py-6 lg:block">
         <div className="flex items-center gap-3">
           <div className="grid h-10 w-10 place-items-center rounded-lg bg-teal-700 text-white">
