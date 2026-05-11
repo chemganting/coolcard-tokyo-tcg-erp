@@ -128,6 +128,8 @@ export async function initDb() {
         stock INTEGER NOT NULL DEFAULT 0,
         low_stock_threshold INTEGER NOT NULL DEFAULT 3,
         notes TEXT NOT NULL DEFAULT '',
+        deleted_at TIMESTAMPTZ,
+        deleted_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
@@ -142,6 +144,22 @@ export async function initDb() {
         unit_price NUMERIC NOT NULL,
         total NUMERIC NOT NULL,
         sold_at DATE NOT NULL,
+        voided_at TIMESTAMPTZ,
+        voided_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS inventory_logs (
+        id SERIAL PRIMARY KEY,
+        product_id INTEGER REFERENCES products(id) ON DELETE SET NULL,
+        user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        action_type TEXT NOT NULL,
+        quantity_delta INTEGER NOT NULL,
+        stock_before INTEGER NOT NULL,
+        stock_after INTEGER NOT NULL,
+        reference_type TEXT,
+        reference_id INTEGER,
+        note TEXT NOT NULL DEFAULT '',
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
 
@@ -165,8 +183,12 @@ export async function initDb() {
     await client.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS unit TEXT NOT NULL DEFAULT '單張'");
     await client.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS cards_per_unit INTEGER NOT NULL DEFAULT 1");
     await client.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS package_spec TEXT NOT NULL DEFAULT '單張卡'");
+    await client.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ");
+    await client.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS deleted_by INTEGER REFERENCES users(id) ON DELETE SET NULL");
     await client.query("ALTER TABLE sales ADD COLUMN IF NOT EXISTS sale_unit TEXT NOT NULL DEFAULT '單張'");
     await client.query("ALTER TABLE sales ADD COLUMN IF NOT EXISTS cards_per_unit INTEGER NOT NULL DEFAULT 1");
+    await client.query("ALTER TABLE sales ADD COLUMN IF NOT EXISTS voided_at TIMESTAMPTZ");
+    await client.query("ALTER TABLE sales ADD COLUMN IF NOT EXISTS voided_by INTEGER REFERENCES users(id) ON DELETE SET NULL");
     await client.query("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS undone_at TIMESTAMPTZ");
 
     await client.query("UPDATE products SET unit = '單張' WHERE unit IS NULL OR unit = ''");

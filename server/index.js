@@ -19,7 +19,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const backupDir = process.env.BACKUP_DIR
   ? path.resolve(process.env.BACKUP_DIR)
   : path.join(__dirname, "backups");
-const backupTables = ["users", "products", "sales", "audit_logs"];
+const backupTables = ["users", "products", "sales", "audit_logs", "inventory_logs"];
 
 function publicUser(row) {
   const user = toCamel(row);
@@ -124,6 +124,7 @@ async function getProfitReport() {
       FROM sales
       JOIN products ON products.id = sales.product_id
       WHERE sales.sold_at = CURRENT_DATE
+        AND sales.voided_at IS NULL
     `),
     query(`
       SELECT
@@ -132,6 +133,7 @@ async function getProfitReport() {
       FROM sales
       JOIN products ON products.id = sales.product_id
       WHERE date_trunc('month', sales.sold_at) = date_trunc('month', CURRENT_DATE)
+        AND sales.voided_at IS NULL
     `),
     query(`
       SELECT
@@ -148,6 +150,7 @@ async function getProfitReport() {
       JOIN products ON products.id = sales.product_id
       JOIN users ON users.id = sales.user_id
       WHERE sales.sold_at = CURRENT_DATE
+        AND sales.voided_at IS NULL
       ORDER BY sales.id DESC
     `),
     query(`
@@ -165,6 +168,7 @@ async function getProfitReport() {
         (price * stock)::float AS inventory_price,
         ((price - cost) * stock)::float AS estimated_profit
       FROM products
+      WHERE deleted_at IS NULL
       ORDER BY stock ASC, name ASC
     `),
     query(`
@@ -179,6 +183,7 @@ async function getProfitReport() {
         END AS margin_rate
       FROM sales
       JOIN products ON products.id = sales.product_id
+      WHERE sales.voided_at IS NULL
       GROUP BY products.id, products.name
       ORDER BY quantity DESC, revenue DESC
       LIMIT 10
@@ -186,7 +191,7 @@ async function getProfitReport() {
     query(`
       SELECT id, name, series, rarity, unit, package_spec, stock, low_stock_threshold
       FROM products
-      WHERE stock <= low_stock_threshold
+      WHERE deleted_at IS NULL AND stock <= low_stock_threshold
       ORDER BY stock ASC, name ASC
       LIMIT 10
     `)
@@ -365,15 +370,16 @@ async function backupFilePath(filename) {
 
 async function getDashboardSnapshot() {
   const [todayRevenue, monthRevenue, totalSalesQuantity, lowStockCount, totalStock, hotProducts, inventoryOverview] = await Promise.all([
-    query("SELECT COALESCE(SUM(total), 0)::float AS value FROM sales WHERE sold_at = CURRENT_DATE"),
-    query("SELECT COALESCE(SUM(total), 0)::float AS value FROM sales WHERE date_trunc('month', sold_at) = date_trunc('month', CURRENT_DATE)"),
-    query("SELECT COALESCE(SUM(quantity), 0)::int AS value FROM sales"),
-    query("SELECT COUNT(*)::int AS value FROM products WHERE stock <= low_stock_threshold"),
-    query("SELECT COALESCE(SUM(stock), 0)::int AS value FROM products"),
+    query("SELECT COALESCE(SUM(total), 0)::float AS value FROM sales WHERE sold_at = CURRENT_DATE AND voided_at IS NULL"),
+    query("SELECT COALESCE(SUM(total), 0)::float AS value FROM sales WHERE date_trunc('month', sold_at) = date_trunc('month', CURRENT_DATE) AND voided_at IS NULL"),
+    query("SELECT COALESCE(SUM(quantity), 0)::int AS value FROM sales WHERE voided_at IS NULL"),
+    query("SELECT COUNT(*)::int AS value FROM products WHERE deleted_at IS NULL AND stock <= low_stock_threshold"),
+    query("SELECT COALESCE(SUM(stock), 0)::int AS value FROM products WHERE deleted_at IS NULL"),
     query(`
       SELECT products.id, products.name, products.series, COALESCE(SUM(sales.quantity), 0)::int AS sold_quantity, COALESCE(SUM(sales.total), 0)::float AS revenue
       FROM sales
       JOIN products ON products.id = sales.product_id
+      WHERE sales.voided_at IS NULL
       GROUP BY products.id
       ORDER BY sold_quantity DESC, revenue DESC
       LIMIT 5
@@ -381,6 +387,7 @@ async function getDashboardSnapshot() {
     query(`
       SELECT id, name, series, rarity, unit, cards_per_unit, package_spec, stock, low_stock_threshold
       FROM products
+      WHERE deleted_at IS NULL
       ORDER BY stock ASC, name ASC
       LIMIT 8
     `)
@@ -399,7 +406,7 @@ async function getDashboardSnapshot() {
 
 async function createDatabaseBackup(type = "manual") {
   const normalizedType = type === "auto" ? "auto" : "manual";
-  const [schemaRows, users, products, sales, auditLogs, inventory, dashboard, profitReport] = await Promise.all([
+  const [schemaRows, users, products, sales, auditLogs, inventoryLogs, inventory, dashboard, profitReport] = await Promise.all([
     query(`
       SELECT table_name, column_name, data_type, is_nullable, column_default
       FROM information_schema.columns
@@ -408,12 +415,12 @@ async function createDatabaseBackup(type = "manual") {
     `, [backupTables]),
     query("SELECT id, username, password_hash, name, display_name, role, is_active, created_at, updated_at FROM users ORDER BY id"),
     query(`
-      SELECT id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost::text, price::text, stock, low_stock_threshold, notes, created_at, updated_at
+      SELECT id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost::text, price::text, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at
       FROM products
       ORDER BY id
     `),
     query(`
-      SELECT id, product_id, user_id, quantity, sale_unit, cards_per_unit, unit_price::text, total::text, sold_at, created_at
+      SELECT id, product_id, user_id, quantity, sale_unit, cards_per_unit, unit_price::text, total::text, sold_at, voided_at, voided_by, created_at
       FROM sales
       ORDER BY id
     `),
@@ -423,8 +430,14 @@ async function createDatabaseBackup(type = "manual") {
       ORDER BY id
     `),
     query(`
+      SELECT id, product_id, user_id, action_type, quantity_delta, stock_before, stock_after, reference_type, reference_id, note, created_at
+      FROM inventory_logs
+      ORDER BY id
+    `),
+    query(`
       SELECT id, name, series, rarity, condition, unit, cards_per_unit, package_spec, stock, low_stock_threshold, (cost * stock)::float AS inventory_cost, (price * stock)::float AS inventory_price
       FROM products
+      WHERE deleted_at IS NULL
       ORDER BY name ASC
     `),
     getDashboardSnapshot(),
@@ -449,7 +462,8 @@ async function createDatabaseBackup(type = "manual") {
       users: users.rows,
       products: products.rows,
       sales: sales.rows,
-      audit_logs: auditLogs.rows
+      audit_logs: auditLogs.rows,
+      inventory_logs: inventoryLogs.rows
     },
     inventory: rowsToCamel(inventory.rows),
     reports: {
@@ -518,7 +532,7 @@ async function restoreDatabaseBackup(filename) {
 
   try {
     await client.query("BEGIN");
-    await client.query("TRUNCATE TABLE audit_logs, sales, products, users RESTART IDENTITY CASCADE");
+    await client.query("TRUNCATE TABLE inventory_logs, audit_logs, sales, products, users RESTART IDENTITY CASCADE");
 
     for (const user of data.users ?? []) {
       await client.query(
@@ -534,8 +548,8 @@ async function restoreDatabaseBackup(filename) {
       await client.query(
         `
           INSERT INTO products
-            (id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost, price, stock, low_stock_threshold, notes, created_at, updated_at)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::numeric, $10::numeric, $11, $12, $13, COALESCE($14::timestamptz, NOW()), COALESCE($15::timestamptz, NOW()))
+            (id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost, price, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::numeric, $10::numeric, $11, $12, $13, $14::timestamptz, $15, COALESCE($16::timestamptz, NOW()), COALESCE($17::timestamptz, NOW()))
         `,
         [
           product.id,
@@ -551,6 +565,8 @@ async function restoreDatabaseBackup(filename) {
           product.stock ?? 0,
           product.low_stock_threshold ?? 3,
           product.notes ?? "",
+          product.deleted_at,
+          product.deleted_by,
           product.created_at,
           product.updated_at
         ]
@@ -560,8 +576,8 @@ async function restoreDatabaseBackup(filename) {
     for (const sale of data.sales ?? []) {
       await client.query(
         `
-          INSERT INTO sales (id, product_id, user_id, quantity, sale_unit, cards_per_unit, unit_price, total, sold_at, created_at)
-          VALUES ($1, $2, $3, $4, $5, $6, $7::numeric, $8::numeric, $9::date, COALESCE($10::timestamptz, NOW()))
+          INSERT INTO sales (id, product_id, user_id, quantity, sale_unit, cards_per_unit, unit_price, total, sold_at, voided_at, voided_by, created_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7::numeric, $8::numeric, $9::date, $10::timestamptz, $11, COALESCE($12::timestamptz, NOW()))
         `,
         [
           sale.id,
@@ -573,6 +589,8 @@ async function restoreDatabaseBackup(filename) {
           sale.unit_price,
           sale.total,
           sale.sold_at,
+          sale.voided_at,
+          sale.voided_by,
           sale.created_at
         ]
       );
@@ -593,6 +611,28 @@ async function restoreDatabaseBackup(filename) {
           JSON.stringify(log.before_data ?? null),
           JSON.stringify(log.after_data ?? null),
           log.undone_at,
+          log.created_at
+        ]
+      );
+    }
+
+    for (const log of data.inventory_logs ?? data.inventoryLogs ?? []) {
+      await client.query(
+        `
+          INSERT INTO inventory_logs (id, product_id, user_id, action_type, quantity_delta, stock_before, stock_after, reference_type, reference_id, note, created_at)
+          VALUES ($1, (SELECT id FROM products WHERE id = $2), (SELECT id FROM users WHERE id = $3), $4, $5, $6, $7, $8, $9, $10, COALESCE($11::timestamptz, NOW()))
+        `,
+        [
+          log.id,
+          log.product_id,
+          log.user_id,
+          log.action_type,
+          log.quantity_delta,
+          log.stock_before,
+          log.stock_after,
+          log.reference_type,
+          log.reference_id,
+          log.note ?? "",
           log.created_at
         ]
       );
@@ -694,10 +734,30 @@ async function writeAuditLog(client, request, actionType, entityType, beforeData
   );
 }
 
+async function writeInventoryLog(client, request, productId, actionType, quantityDelta, stockBefore, stockAfter, referenceType, referenceId, note = "") {
+  await client.query(
+    `
+      INSERT INTO inventory_logs (product_id, user_id, action_type, quantity_delta, stock_before, stock_after, reference_type, reference_id, note)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    `,
+    [
+      productId,
+      request.user?.id ?? null,
+      actionType,
+      quantityDelta,
+      stockBefore,
+      stockAfter,
+      referenceType,
+      referenceId,
+      note
+    ]
+  );
+}
+
 async function productById(client, id) {
   const { rows } = await client.query(
     `
-      SELECT id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost::text, price::text, stock, low_stock_threshold, notes, created_at, updated_at
+      SELECT id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost::text, price::text, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at
       FROM products
       WHERE id = $1
     `,
@@ -709,7 +769,7 @@ async function productById(client, id) {
 async function saleById(client, id) {
   const { rows } = await client.query(
     `
-      SELECT id, product_id, user_id, quantity, sale_unit, cards_per_unit, unit_price::text, total::text, sold_at, created_at
+      SELECT id, product_id, user_id, quantity, sale_unit, cards_per_unit, unit_price::text, total::text, sold_at, voided_at, voided_by, created_at
       FROM sales
       WHERE id = $1
     `,
@@ -730,8 +790,8 @@ async function restoreProductSnapshot(client, product) {
   await client.query(
     `
       INSERT INTO products
-        (id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost, price, stock, low_stock_threshold, notes, created_at, updated_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::numeric, $10::numeric, $11, $12, $13, COALESCE($14::timestamptz, NOW()), COALESCE($15::timestamptz, NOW()))
+        (id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost, price, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::numeric, $10::numeric, $11, $12, $13, $14::timestamptz, $15, COALESCE($16::timestamptz, NOW()), COALESCE($17::timestamptz, NOW()))
       ON CONFLICT (id) DO UPDATE SET
         name = EXCLUDED.name,
         series = EXCLUDED.series,
@@ -745,6 +805,8 @@ async function restoreProductSnapshot(client, product) {
         stock = EXCLUDED.stock,
         low_stock_threshold = EXCLUDED.low_stock_threshold,
         notes = EXCLUDED.notes,
+        deleted_at = EXCLUDED.deleted_at,
+        deleted_by = EXCLUDED.deleted_by,
         updated_at = NOW()
     `,
     [
@@ -761,6 +823,8 @@ async function restoreProductSnapshot(client, product) {
       product.stock ?? 0,
       product.low_stock_threshold ?? 3,
       product.notes ?? "",
+      product.deleted_at,
+      product.deleted_by,
       product.created_at,
       product.updated_at
     ]
@@ -788,8 +852,8 @@ async function restoreUserSnapshot(client, user) {
 async function restoreSaleSnapshot(client, sale) {
   await client.query(
     `
-      INSERT INTO sales (id, product_id, user_id, quantity, sale_unit, cards_per_unit, unit_price, total, sold_at, created_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7::numeric, $8::numeric, $9::date, COALESCE($10::timestamptz, NOW()))
+      INSERT INTO sales (id, product_id, user_id, quantity, sale_unit, cards_per_unit, unit_price, total, sold_at, voided_at, voided_by, created_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7::numeric, $8::numeric, $9::date, $10::timestamptz, $11, COALESCE($12::timestamptz, NOW()))
       ON CONFLICT (id) DO UPDATE SET
         product_id = EXCLUDED.product_id,
         user_id = EXCLUDED.user_id,
@@ -798,9 +862,11 @@ async function restoreSaleSnapshot(client, sale) {
         cards_per_unit = EXCLUDED.cards_per_unit,
         unit_price = EXCLUDED.unit_price,
         total = EXCLUDED.total,
-        sold_at = EXCLUDED.sold_at
+        sold_at = EXCLUDED.sold_at,
+        voided_at = EXCLUDED.voided_at,
+        voided_by = EXCLUDED.voided_by
     `,
-    [sale.id, sale.product_id, sale.user_id, sale.quantity, sale.sale_unit ?? "單張", sale.cards_per_unit ?? 1, sale.unit_price, sale.total, sale.sold_at, sale.created_at]
+    [sale.id, sale.product_id, sale.user_id, sale.quantity, sale.sale_unit ?? "單張", sale.cards_per_unit ?? 1, sale.unit_price, sale.total, sale.sold_at, sale.voided_at, sale.voided_by, sale.created_at]
   );
 }
 
@@ -1046,13 +1112,34 @@ app.get("/api/products", currentUser, async (request, response, next) => {
     const { rows } = await query(
       `
         SELECT id, name, series, rarity, condition, unit, cards_per_unit, package_spec,
-               cost::float AS cost, price::float AS price, stock, low_stock_threshold, notes, created_at, updated_at
+               cost::float AS cost, price::float AS price, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at
         FROM products
-        WHERE name ILIKE $1 OR series ILIKE $1 OR rarity ILIKE $1 OR condition ILIKE $1
-           OR unit ILIKE $1 OR package_spec ILIKE $1 OR notes ILIKE $1
+        WHERE deleted_at IS NULL
+          AND (name ILIKE $1 OR series ILIKE $1 OR rarity ILIKE $1 OR condition ILIKE $1
+           OR unit ILIKE $1 OR package_spec ILIKE $1 OR notes ILIKE $1)
         ORDER BY updated_at DESC, id DESC
       `,
       [keyword]
+    );
+    response.json(rowsToCamel(rows));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/products/deleted", currentUser, requireAdmin, async (_request, response, next) => {
+  try {
+    const { rows } = await query(
+      `
+        SELECT products.id, products.name, products.series, products.rarity, products.condition, products.unit,
+               products.cards_per_unit, products.package_spec, products.cost::float AS cost, products.price::float AS price,
+               products.stock, products.low_stock_threshold, products.notes, products.deleted_at, products.deleted_by,
+               products.created_at, products.updated_at, users.name AS deleted_by_name
+        FROM products
+        LEFT JOIN users ON users.id = products.deleted_by
+        WHERE products.deleted_at IS NOT NULL
+        ORDER BY products.deleted_at DESC, products.id DESC
+      `
     );
     response.json(rowsToCamel(rows));
   } catch (error) {
@@ -1112,6 +1199,10 @@ app.put("/api/products/:id", currentUser, requireAdmin, async (request, response
       await client.query("ROLLBACK");
       return response.status(404).json({ message: "商品不存在" });
     }
+    if (before.deleted_at) {
+      await client.query("ROLLBACK");
+      return response.status(409).json({ message: "已刪除商品需先還原才能編輯" });
+    }
 
     const entityType = before.stock !== product.stock ? "inventory" : "product";
     const result = await client.query(
@@ -1131,7 +1222,7 @@ app.put("/api/products/:id", currentUser, requireAdmin, async (request, response
             notes = $12,
             updated_at = NOW()
         WHERE id = $13
-        RETURNING id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost::text, price::text, stock, low_stock_threshold, notes, created_at, updated_at
+        RETURNING id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost::text, price::text, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at
       `,
       [
         product.name,
@@ -1149,6 +1240,9 @@ app.put("/api/products/:id", currentUser, requireAdmin, async (request, response
         Number(request.params.id)
       ]
     );
+    if (before.stock !== result.rows[0].stock) {
+      await writeInventoryLog(client, request, result.rows[0].id, "manual_adjustment", result.rows[0].stock - before.stock, before.stock, result.rows[0].stock, "product", result.rows[0].id, "商品庫存調整");
+    }
     await writeAuditLog(client, request, "update", entityType, before, result.rows[0]);
     await client.query("COMMIT");
     response.json({ ok: true });
@@ -1164,19 +1258,64 @@ app.delete("/api/products/:id", currentUser, requireAdmin, async (request, respo
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const saleCount = await client.query("SELECT COUNT(*)::int AS count FROM sales WHERE product_id = $1", [request.params.id]);
-    if (saleCount.rows[0].count > 0) {
+    const before = await productById(client, Number(request.params.id));
+    if (!before) {
       await client.query("ROLLBACK");
-      return response.status(409).json({ message: "已有銷售紀錄的商品不可刪除" });
+      return response.status(404).json({ message: "商品不存在" });
+    }
+    if (before.deleted_at) {
+      await client.query("ROLLBACK");
+      return response.status(409).json({ message: "商品已在已刪除列表" });
     }
 
-    const before = await productById(client, Number(request.params.id));
-    const result = await client.query("DELETE FROM products WHERE id = $1", [request.params.id]);
+    const result = await client.query(
+      `
+        UPDATE products
+        SET deleted_at = NOW(), deleted_by = $1, updated_at = NOW()
+        WHERE id = $2 AND deleted_at IS NULL
+        RETURNING id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost::text, price::text, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at
+      `,
+      [request.user.id, request.params.id]
+    );
     if (result.rowCount === 0) {
       await client.query("ROLLBACK");
       return response.status(404).json({ message: "商品不存在" });
     }
-    await writeAuditLog(client, request, "delete", "product", before, null);
+    await writeAuditLog(client, request, "delete", "product", before, result.rows[0]);
+    await client.query("COMMIT");
+    response.json({ ok: true });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+app.patch("/api/products/:id/restore", currentUser, requireAdmin, async (request, response, next) => {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const before = await productById(client, Number(request.params.id));
+    if (!before) {
+      await client.query("ROLLBACK");
+      return response.status(404).json({ message: "商品不存在" });
+    }
+    if (!before.deleted_at) {
+      await client.query("ROLLBACK");
+      return response.status(409).json({ message: "商品未被刪除" });
+    }
+
+    const result = await client.query(
+      `
+        UPDATE products
+        SET deleted_at = NULL, deleted_by = NULL, updated_at = NOW()
+        WHERE id = $1
+        RETURNING id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost::text, price::text, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at
+      `,
+      [request.params.id]
+    );
+    await writeAuditLog(client, request, "restore", "product", before, result.rows[0]);
     await client.query("COMMIT");
     response.json({ ok: true });
   } catch (error) {
@@ -1330,6 +1469,8 @@ app.get("/api/sales", currentUser, async (request, response, next) => {
           sales.unit_price::float AS unit_price,
           sales.total::float AS total,
           to_char(sales.sold_at, 'YYYY-MM-DD') AS sold_at,
+          sales.voided_at,
+          sales.voided_by,
           sales.created_at,
           products.name AS product_name,
           products.series AS product_series,
@@ -1367,7 +1508,7 @@ app.post("/api/sales", currentUser, async (request, response, next) => {
   try {
     await client.query("BEGIN");
     const productResult = await client.query(
-      "SELECT id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost::text, price::text, stock, low_stock_threshold, notes, created_at, updated_at FROM products WHERE id = $1 FOR UPDATE",
+      "SELECT id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost::text, price::text, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at FROM products WHERE id = $1 FOR UPDATE",
       [productId]
     );
     const product = productResult.rows[0];
@@ -1375,6 +1516,10 @@ app.post("/api/sales", currentUser, async (request, response, next) => {
     if (!product) {
       await client.query("ROLLBACK");
       return response.status(404).json({ message: "商品不存在" });
+    }
+    if (product.deleted_at) {
+      await client.query("ROLLBACK");
+      return response.status(409).json({ message: "已刪除商品不可新增銷售" });
     }
     if (product.stock < quantity) {
       await client.query("ROLLBACK");
@@ -1386,13 +1531,14 @@ app.post("/api/sales", currentUser, async (request, response, next) => {
       `
         INSERT INTO sales (product_id, user_id, quantity, sale_unit, cards_per_unit, unit_price, total, sold_at)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        RETURNING id, product_id, user_id, quantity, sale_unit, cards_per_unit, unit_price::text, total::text, sold_at, created_at
+        RETURNING id, product_id, user_id, quantity, sale_unit, cards_per_unit, unit_price::text, total::text, sold_at, voided_at, voided_by, created_at
       `,
       [productId, request.user.id, quantity, saleUnit, saleCardsPerUnit, unitPrice, total, soldAt]
     );
 
     await client.query("UPDATE products SET stock = stock - $1, updated_at = NOW() WHERE id = $2", [quantity, productId]);
     const afterProduct = await productById(client, productId);
+    await writeInventoryLog(client, request, productId, "sale", -quantity, product.stock, afterProduct.stock, "sale", sale.rows[0].id, "新增銷售扣庫存");
     await writeAuditLog(client, request, "create", "sale", { product }, { sale: sale.rows[0], product: afterProduct });
     await client.query("COMMIT");
     response.status(201).json({ id: sale.rows[0].id });
@@ -1404,12 +1550,12 @@ app.post("/api/sales", currentUser, async (request, response, next) => {
   }
 });
 
-app.delete("/api/sales/:id", currentUser, requireAdmin, async (request, response, next) => {
+async function voidSale(request, response, next) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     const saleResult = await client.query(
-      "SELECT id, product_id, user_id, quantity, sale_unit, cards_per_unit, unit_price::text, total::text, sold_at, created_at FROM sales WHERE id = $1",
+      "SELECT id, product_id, user_id, quantity, sale_unit, cards_per_unit, unit_price::text, total::text, sold_at, voided_at, voided_by, created_at FROM sales WHERE id = $1 FOR UPDATE",
       [request.params.id]
     );
     const sale = saleResult.rows[0];
@@ -1417,12 +1563,25 @@ app.delete("/api/sales/:id", currentUser, requireAdmin, async (request, response
       await client.query("ROLLBACK");
       return response.status(404).json({ message: "銷售紀錄不存在" });
     }
-    const beforeProduct = await productById(client, sale.product_id);
+    if (sale.voided_at) {
+      await client.query("ROLLBACK");
+      return response.status(409).json({ message: "銷售紀錄已作廢" });
+    }
 
-    await client.query("DELETE FROM sales WHERE id = $1", [request.params.id]);
+    const beforeProduct = await productById(client, sale.product_id);
     await client.query("UPDATE products SET stock = stock + $1, updated_at = NOW() WHERE id = $2", [sale.quantity, sale.product_id]);
+    const voidedSale = await client.query(
+      `
+        UPDATE sales
+        SET voided_at = NOW(), voided_by = $1
+        WHERE id = $2
+        RETURNING id, product_id, user_id, quantity, sale_unit, cards_per_unit, unit_price::text, total::text, sold_at, voided_at, voided_by, created_at
+      `,
+      [request.user.id, request.params.id]
+    );
     const afterProduct = await productById(client, sale.product_id);
-    await writeAuditLog(client, request, "delete", "sale", { sale, product: beforeProduct }, { product: afterProduct });
+    await writeInventoryLog(client, request, sale.product_id, "sale_void", sale.quantity, beforeProduct.stock, afterProduct.stock, "sale", sale.id, "銷售作廢補回庫存");
+    await writeAuditLog(client, request, "update", "sale", { sale, product: beforeProduct }, { sale: voidedSale.rows[0], product: afterProduct });
     await client.query("COMMIT");
     response.json({ ok: true });
   } catch (error) {
@@ -1431,7 +1590,10 @@ app.delete("/api/sales/:id", currentUser, requireAdmin, async (request, response
   } finally {
     client.release();
   }
-});
+}
+
+app.post("/api/sales/:id/void", currentUser, requireAdmin, voidSale);
+app.delete("/api/sales/:id", currentUser, requireAdmin, voidSale);
 
 app.get("/api/audit-logs", currentUser, async (request, response, next) => {
   try {
@@ -1491,7 +1653,10 @@ app.post("/api/undo", currentUser, async (request, response, next) => {
 
     if (log.entity_type === "product" || log.entity_type === "inventory") {
       if (log.action_type === "create") {
-        await client.query("DELETE FROM products WHERE id = $1", [after.id]);
+        const beforeProduct = await productById(client, after.id);
+        await client.query("UPDATE products SET deleted_at = NOW(), deleted_by = $1, updated_at = NOW() WHERE id = $2 AND deleted_at IS NULL", [request.user.id, after.id]);
+        const afterProduct = await productById(client, after.id);
+        if (beforeProduct && afterProduct) await writeAuditLog(client, request, "delete", "product", beforeProduct, afterProduct);
       } else if (log.action_type === "update") {
         await restoreProductSnapshot(client, before);
       } else if (log.action_type === "delete") {
@@ -1500,13 +1665,14 @@ app.post("/api/undo", currentUser, async (request, response, next) => {
       }
     } else if (log.entity_type === "sale") {
       if (log.action_type === "create") {
-        await client.query("DELETE FROM sales WHERE id = $1", [after.sale.id]);
+        await client.query("UPDATE sales SET voided_at = COALESCE(voided_at, NOW()), voided_by = COALESCE(voided_by, $1) WHERE id = $2", [request.user.id, after.sale.id]);
         if (before.product) await restoreProductSnapshot(client, before.product);
       } else if (log.action_type === "delete") {
         if (before.product) await restoreProductSnapshot(client, before.product);
         await restoreSaleSnapshot(client, before.sale);
         await syncSequence(client, "sales");
       } else if (log.action_type === "update") {
+        if (before.product) await restoreProductSnapshot(client, before.product);
         await restoreSaleSnapshot(client, before.sale ?? before);
       }
     } else if (log.entity_type === "user") {
@@ -1540,15 +1706,16 @@ app.post("/api/undo", currentUser, async (request, response, next) => {
 app.get("/api/dashboard", currentUser, async (_request, response, next) => {
   try {
     const [todayRevenue, monthRevenue, totalSalesQuantity, lowStockCount, totalStock, hotProducts, inventoryOverview] = await Promise.all([
-      query("SELECT COALESCE(SUM(total), 0)::float AS value FROM sales WHERE sold_at = CURRENT_DATE"),
-      query("SELECT COALESCE(SUM(total), 0)::float AS value FROM sales WHERE date_trunc('month', sold_at) = date_trunc('month', CURRENT_DATE)"),
-      query("SELECT COALESCE(SUM(quantity), 0)::int AS value FROM sales"),
-      query("SELECT COUNT(*)::int AS value FROM products WHERE stock <= low_stock_threshold"),
-      query("SELECT COALESCE(SUM(stock), 0)::int AS value FROM products"),
+      query("SELECT COALESCE(SUM(total), 0)::float AS value FROM sales WHERE sold_at = CURRENT_DATE AND voided_at IS NULL"),
+      query("SELECT COALESCE(SUM(total), 0)::float AS value FROM sales WHERE date_trunc('month', sold_at) = date_trunc('month', CURRENT_DATE) AND voided_at IS NULL"),
+      query("SELECT COALESCE(SUM(quantity), 0)::int AS value FROM sales WHERE voided_at IS NULL"),
+      query("SELECT COUNT(*)::int AS value FROM products WHERE deleted_at IS NULL AND stock <= low_stock_threshold"),
+      query("SELECT COALESCE(SUM(stock), 0)::int AS value FROM products WHERE deleted_at IS NULL"),
       query(`
         SELECT products.id, products.name, products.series, COALESCE(SUM(sales.quantity), 0)::int AS sold_quantity, COALESCE(SUM(sales.total), 0)::float AS revenue
         FROM sales
         JOIN products ON products.id = sales.product_id
+        WHERE sales.voided_at IS NULL
         GROUP BY products.id
         ORDER BY sold_quantity DESC, revenue DESC
         LIMIT 5
@@ -1556,6 +1723,7 @@ app.get("/api/dashboard", currentUser, async (_request, response, next) => {
       query(`
         SELECT id, name, series, rarity, unit, cards_per_unit, package_spec, stock, low_stock_threshold
         FROM products
+        WHERE deleted_at IS NULL
         ORDER BY stock ASC, name ASC
         LIMIT 8
       `)

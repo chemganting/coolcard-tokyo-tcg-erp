@@ -241,6 +241,7 @@ function Login({ onLogin }) {
 function App() {
   const [auth, setAuth] = useState(authFromStorage());
   const [products, setProducts] = useState([]);
+  const [deletedProducts, setDeletedProducts] = useState([]);
   const [sales, setSales] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [backups, setBackups] = useState([]);
@@ -299,8 +300,9 @@ function App() {
     setLoading(true);
     const saleQuery = `?from=${dateRange.from}&to=${dateRange.to}`;
     try {
-      const [productRows, saleRows, dashboardRow, profitRow, employeeRows, backupRows, auditRows] = await Promise.all([
+      const [productRows, deletedProductRows, saleRows, dashboardRow, profitRow, employeeRows, backupRows, auditRows] = await Promise.all([
         api(`/products?q=${encodeURIComponent(query)}`),
+        isAdmin ? api("/products/deleted").catch(() => []) : Promise.resolve([]),
         api(`/sales${saleQuery}`),
         api("/dashboard"),
         api("/profit-report"),
@@ -309,6 +311,7 @@ function App() {
         api("/audit-logs").catch(() => [])
       ]);
       setProducts(productRows);
+      setDeletedProducts(deletedProductRows);
       setSales(saleRows);
       setDashboard(dashboardRow);
       setProfitReport(profitRow);
@@ -465,11 +468,23 @@ function App() {
   };
 
   const deleteProduct = async (product) => {
-    if (!window.confirm(`確定刪除「${product.name}」？`)) return;
+    if (!window.confirm(`確定將「${product.name}」移到已刪除商品列表？此操作不會永久刪除資料。`)) return;
     try {
       await api(`/products/${product.id}`, { method: "DELETE" });
       setAutoSaveStatus("已自動儲存");
       await load();
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const restoreProduct = async (product) => {
+    if (!window.confirm(`確定還原「${product.name}」？`)) return;
+    try {
+      await api(`/products/${product.id}/restore`, { method: "PATCH", body: JSON.stringify({}) });
+      setAutoSaveStatus("已還原商品");
+      await load();
+      window.alert("商品已還原");
     } catch (err) {
       setError(err.message);
     }
@@ -565,10 +580,10 @@ function App() {
     }
   };
 
-  const deleteSale = async (sale) => {
-    if (!window.confirm(`確定刪除銷售紀錄 #${sale.id}？庫存會自動回補。`)) return;
+  const voidSale = async (sale) => {
+    if (!window.confirm(`確定作廢銷售紀錄 #${sale.id}？作廢後會自動補回庫存，銷售紀錄仍會保留。`)) return;
     try {
-      await api(`/sales/${sale.id}`, { method: "DELETE" });
+      await api(`/sales/${sale.id}/void`, { method: "POST", body: JSON.stringify({}) });
       setAutoSaveStatus("已自動儲存");
       await load();
     } catch (err) {
@@ -962,6 +977,7 @@ function App() {
                 </div>
               </div>
             </div>
+
           </section>
 
           <section className="grid gap-6 xl:grid-cols-2">
@@ -1005,6 +1021,7 @@ function App() {
                 ))}
               </div>
             </div>
+
           </section>
 
           <section id="商品庫存">
@@ -1201,6 +1218,74 @@ function App() {
                 </div>
               </div>
             </div>
+
+            {isAdmin && (
+              <div className="mt-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="mb-4 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <Trash2 className="h-5 w-5 text-slate-700" />
+                    <h3 className="font-semibold text-slate-900">已刪除商品列表</h3>
+                  </div>
+                  <span className="rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600">{deletedProducts.length} 筆</span>
+                </div>
+
+                <div className="hidden overflow-x-auto lg:block">
+                  <table className="min-w-full table-auto text-left text-sm">
+                    <thead className="border-b border-slate-200 text-xs text-slate-500">
+                      <tr>
+                        <th className="py-3 pr-4">商品名稱</th>
+                        <th className="py-3 pr-4">系列</th>
+                        <th className="py-3 pr-4">庫存</th>
+                        <th className="py-3 pr-4">刪除時間</th>
+                        <th className="py-3 pr-4">執行人</th>
+                        <th className="py-3">操作</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {deletedProducts.map((product) => (
+                        <tr key={product.id}>
+                          <td className="py-3 pr-4 font-medium">{product.name}</td>
+                          <td className="py-3 pr-4">{product.series} · {product.rarity}</td>
+                          <td className="py-3 pr-4">{formatStock(product)}</td>
+                          <td className="py-3 pr-4">{product.deletedAt ? new Date(product.deletedAt).toLocaleString("zh-TW") : "-"}</td>
+                          <td className="py-3 pr-4">{product.deletedByName ?? "-"}</td>
+                          <td className="py-3">
+                            <Button type="button" variant="secondary" onClick={() => restoreProduct(product)}>
+                              <RotateCcw className="h-4 w-4" />
+                              還原
+                            </Button>
+                          </td>
+                        </tr>
+                      ))}
+                      {deletedProducts.length === 0 && (
+                        <tr>
+                          <td className="py-6 text-center text-slate-500" colSpan="6">尚無已刪除商品</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="grid gap-3 lg:hidden">
+                  {deletedProducts.map((product) => (
+                    <article key={product.id} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="truncate font-semibold">{product.name}</p>
+                          <p className="mt-1 text-sm text-slate-500">{product.series} · {formatStock(product)}</p>
+                          <p className="mt-1 text-xs text-slate-500">{product.deletedAt ? new Date(product.deletedAt).toLocaleString("zh-TW") : "-"}</p>
+                        </div>
+                        <Button type="button" variant="secondary" onClick={() => restoreProduct(product)}>
+                          <RotateCcw className="h-4 w-4" />
+                          還原
+                        </Button>
+                      </div>
+                    </article>
+                  ))}
+                  {deletedProducts.length === 0 && <p className="py-6 text-center text-slate-500">尚無已刪除商品</p>}
+                </div>
+              </div>
+            )}
           </section>
 
           {isAdmin && (
@@ -1326,6 +1411,7 @@ function App() {
                       <th className="py-3 pr-4">單價</th>
                       <th className="py-3 pr-4">總金額</th>
                       <th className="py-3 pr-4">店員</th>
+                      <th className="py-3 pr-4">狀態</th>
                       <th className="py-3">操作</th>
                     </tr>
                   </thead>
@@ -1337,11 +1423,17 @@ function App() {
                         <td className="py-3 pr-4">{sale.quantity} {sale.saleUnit}</td>
                         <td className="py-3 pr-4">{sale.cardsPerUnit} 張/{sale.saleUnit}</td>
                         <td className="py-3 pr-4">{currency.format(sale.unitPrice)}</td>
-                        <td className="py-3 pr-4 font-semibold">{currency.format(sale.total)}</td>
+                        <td className={`py-3 pr-4 font-semibold ${sale.voidedAt ? "text-slate-400 line-through" : ""}`}>{currency.format(sale.total)}</td>
                         <td className="py-3 pr-4">{sale.staffName}</td>
+                        <td className="py-3 pr-4">
+                          <span className={`rounded px-2 py-1 text-xs font-medium ${sale.voidedAt ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-700"}`}>
+                            {sale.voidedAt ? "已作廢" : "有效"}
+                          </span>
+                        </td>
                         <td className="py-3">
-                          <Button variant="danger" disabled={!isAdmin} onClick={() => deleteSale(sale)}>
-                            <Trash2 className="h-4 w-4" />
+                          <Button variant="danger" disabled={!isAdmin || sale.voidedAt} onClick={() => voidSale(sale)}>
+                            <X className="h-4 w-4" />
+                            {sale.voidedAt ? "已作廢" : "作廢"}
                           </Button>
                         </td>
                       </tr>
@@ -1357,12 +1449,16 @@ function App() {
                         <p className="font-semibold">{sale.productName}</p>
                         <p className="text-sm text-slate-500">{sale.productSeries} · {sale.soldAt}</p>
                       </div>
-                      <p className="font-semibold">{currency.format(sale.total)}</p>
+                      <div className="text-right">
+                        <p className={`font-semibold ${sale.voidedAt ? "text-slate-400 line-through" : ""}`}>{currency.format(sale.total)}</p>
+                        {sale.voidedAt && <p className="mt-1 text-xs text-rose-600">已作廢</p>}
+                      </div>
                     </div>
                     <div className="mt-3 flex items-center justify-between">
                       <p className="text-sm text-slate-600">{sale.quantity} {sale.saleUnit} · {currency.format(sale.unitPrice)}</p>
-                      <Button variant="danger" disabled={!isAdmin} onClick={() => deleteSale(sale)}>
-                        <Trash2 className="h-4 w-4" />
+                      <Button variant="danger" disabled={!isAdmin || sale.voidedAt} onClick={() => voidSale(sale)}>
+                        <X className="h-4 w-4" />
+                        {sale.voidedAt ? "已作廢" : "作廢"}
                       </Button>
                     </div>
                   </article>
