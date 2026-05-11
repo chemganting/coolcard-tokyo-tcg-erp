@@ -470,6 +470,7 @@ function App() {
   const [deletedProductsOpen, setDeletedProductsOpen] = useState(false);
   const [auditOpen, setAuditOpen] = useState(false);
   const [inventoryOpen, setInventoryOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [auditLoaded, setAuditLoaded] = useState(false);
   const [auditLoading, setAuditLoading] = useState(false);
   const [inventoryFilters, setInventoryFilters] = useState({
@@ -1555,8 +1556,9 @@ function App() {
               <h2 className="text-lg font-semibold">商品庫存管理</h2>
             </div>
 
-            <div className="grid min-w-0 max-w-full gap-6 md:grid-cols-[minmax(280px,40%)_minmax(0,60%)] lg:grid-cols-[minmax(300px,35%)_minmax(0,65%)] xl:grid-cols-[minmax(340px,35%)_minmax(0,65%)]">
-              <form onSubmit={submitProduct} className="min-w-0 rounded-xl border border-slate-200 bg-white shadow-sm lg:sticky lg:top-24 lg:max-h-[calc(100vh-8rem)] lg:overflow-hidden">
+            <div className="grid min-w-0 max-w-full gap-6 xl:grid-cols-[minmax(340px,35%)_minmax(0,65%)]">
+              <div className="grid min-w-0 gap-6">
+                <form onSubmit={submitProduct} className="min-w-0 rounded-xl border border-slate-200 bg-white shadow-sm lg:sticky lg:top-24 lg:max-h-[calc(100vh-8rem)] lg:overflow-hidden">
                 <div className="border-b border-slate-200 px-4 py-4">
                   <div className="flex items-center gap-2">
                     <PackagePlus className="h-5 w-5 text-slate-700" />
@@ -1696,7 +1698,51 @@ function App() {
                   </Button>
                   {editingId && <Button variant="secondary" type="button" className="w-full sm:w-auto" onClick={() => { setEditingId(null); setProductForm(emptyProduct); }}>取消</Button>}
                 </div>
-              </form>
+                </form>
+
+                {isAdmin && (
+                  <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+                    <button
+                      type="button"
+                      onClick={() => setImportOpen((current) => !current)}
+                      aria-expanded={importOpen}
+                      className="flex w-full items-center justify-between gap-3 px-4 py-4 text-left transition hover:bg-slate-50"
+                    >
+                      <div className="min-w-0">
+                        <h3 className="text-base font-semibold text-slate-950">Excel / CSV 商品匯入</h3>
+                        <p className="mt-1 text-sm text-slate-500">批次匯入商品資料，預設收合，不佔用主要版面。</p>
+                      </div>
+                      <ChevronDown className={`h-4 w-4 shrink-0 text-slate-500 transition-transform duration-300 ${importOpen ? "rotate-180" : ""}`} />
+                    </button>
+                    <div
+                      className="overflow-hidden transition-[max-height,opacity] duration-300 ease-out"
+                      style={{ maxHeight: importOpen ? "800px" : "0px", opacity: importOpen ? 1 : 0 }}
+                      aria-hidden={!importOpen}
+                    >
+                      <div className="border-t border-slate-200 p-4">
+                        <TextArea
+                          placeholder={"貼上 UTF-8 CSV 內容，欄位：商品名稱,系列,單位,包裝規格,成本,售價,庫存數量"}
+                          value={importCsv}
+                          onChange={(e) => setImportCsv(e.target.value)}
+                        />
+                        <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                          <p className="text-sm text-slate-500">支援 Excel 匯出的 CSV。未填稀有度/卡況時會自動補預設值。</p>
+                          <div className="flex flex-col gap-2 sm:flex-row">
+                            <label className="inline-flex h-12 cursor-pointer items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-base font-medium text-slate-700 transition hover:bg-slate-50 sm:h-10 sm:px-3 sm:text-sm">
+                              選擇 CSV
+                              <input type="file" accept=".csv,text/csv,text/plain" className="hidden" onChange={importCsvFile} />
+                            </label>
+                            <Button type="button" className="w-full sm:w-auto" onClick={importProducts}>
+                              <PackagePlus className="h-4 w-4" />
+                              匯入商品
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+                )}
+              </div>
 
               <div className="min-w-0 max-w-full overflow-hidden rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
                 <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -2047,33 +2093,6 @@ function App() {
               </div>
             </div>
           </section>
-
-          {isAdmin && (
-            <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="mb-4 flex items-center gap-2">
-                <PackagePlus className="h-5 w-5 text-slate-700" />
-                <h2 className="text-lg font-semibold">Excel / CSV 商品匯入</h2>
-              </div>
-              <TextArea
-                placeholder={"貼上 UTF-8 CSV 內容，欄位：商品名稱,系列,單位,包裝規格,成本,售價,庫存數量"}
-                value={importCsv}
-                onChange={(e) => setImportCsv(e.target.value)}
-              />
-              <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <p className="text-sm text-slate-500">支援 Excel 匯出的 CSV。未填稀有度/卡況時會自動補預設值。</p>
-                <div className="flex flex-col gap-2 sm:flex-row">
-                  <label className="inline-flex h-12 cursor-pointer items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-base font-medium text-slate-700 transition hover:bg-slate-50 sm:h-10 sm:px-3 sm:text-sm">
-                    選擇 CSV
-                    <input type="file" accept=".csv,text/csv,text/plain" className="hidden" onChange={importCsvFile} />
-                  </label>
-                  <Button type="button" className="w-full sm:w-auto" onClick={importProducts}>
-                    <PackagePlus className="h-4 w-4" />
-                    匯入商品
-                  </Button>
-                </div>
-              </div>
-            </section>
-          )}
 
           <section id="進貨管理" className="grid min-w-0 gap-6 xl:grid-cols-[minmax(280px,0.8fr)_minmax(0,1.2fr)]">
             <form onSubmit={submitPurchase} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
