@@ -1,9 +1,13 @@
 import cors from "cors";
 import bcrypt from "bcryptjs";
 import express from "express";
+import fs from "node:fs/promises";
 import { google } from "googleapis";
 import jwt from "jsonwebtoken";
 import morgan from "morgan";
+import path from "node:path";
+import cron from "node-cron";
+import { fileURLToPath } from "node:url";
 import { initDb, pool, query, rowsToCamel, toCamel } from "./db.js";
 
 const app = express();
@@ -11,6 +15,11 @@ const port = process.env.PORT ?? 4000;
 const jwtSecret = process.env.JWT_SECRET ?? "local-development-secret-change-me";
 const allowedUnits = new Set(["單張", "包", "盒", "箱", "組", "其他"]);
 const reportSheetTabs = ["今日營收", "庫存總表", "熱銷排行"];
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const backupDir = process.env.BACKUP_DIR
+  ? path.resolve(process.env.BACKUP_DIR)
+  : path.join(__dirname, "backups");
+const backupTables = ["users", "products", "sales"];
 
 function publicUser(row) {
   const user = toCamel(row);
@@ -307,6 +316,278 @@ async function syncReportToGoogleSheets(report) {
       requestBody: { values: rows }
     });
   }
+}
+
+function backupStorageTargets() {
+  return {
+    local: { enabled: true, path: backupDir },
+    googleDrive: { enabled: false, reserved: true },
+    s3: { enabled: false, reserved: true },
+    cloudinary: { enabled: false, reserved: true }
+  };
+}
+
+function backupFilename(type) {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  return `coolcard-backup-${type}-${timestamp}.json`;
+}
+
+function assertSafeBackupFilename(filename) {
+  const decoded = path.basename(String(filename ?? ""));
+  if (!/^coolcard-backup-(manual|auto)-[\w.-]+\.json$/.test(decoded)) {
+    throw new Error("備份檔名不合法");
+  }
+  return decoded;
+}
+
+async function ensureBackupDir() {
+  await fs.mkdir(backupDir, { recursive: true });
+}
+
+async function backupFilePath(filename) {
+  const safeName = assertSafeBackupFilename(filename);
+  await ensureBackupDir();
+  return path.join(backupDir, safeName);
+}
+
+async function getDashboardSnapshot() {
+  const [todayRevenue, monthRevenue, totalSalesQuantity, lowStockCount, totalStock, hotProducts, inventoryOverview] = await Promise.all([
+    query("SELECT COALESCE(SUM(total), 0)::float AS value FROM sales WHERE sold_at = CURRENT_DATE"),
+    query("SELECT COALESCE(SUM(total), 0)::float AS value FROM sales WHERE date_trunc('month', sold_at) = date_trunc('month', CURRENT_DATE)"),
+    query("SELECT COALESCE(SUM(quantity), 0)::int AS value FROM sales"),
+    query("SELECT COUNT(*)::int AS value FROM products WHERE stock <= low_stock_threshold"),
+    query("SELECT COALESCE(SUM(stock), 0)::int AS value FROM products"),
+    query(`
+      SELECT products.id, products.name, products.series, COALESCE(SUM(sales.quantity), 0)::int AS sold_quantity, COALESCE(SUM(sales.total), 0)::float AS revenue
+      FROM sales
+      JOIN products ON products.id = sales.product_id
+      GROUP BY products.id
+      ORDER BY sold_quantity DESC, revenue DESC
+      LIMIT 5
+    `),
+    query(`
+      SELECT id, name, series, rarity, unit, cards_per_unit, package_spec, stock, low_stock_threshold
+      FROM products
+      ORDER BY stock ASC, name ASC
+      LIMIT 8
+    `)
+  ]);
+
+  return {
+    todayRevenue: todayRevenue.rows[0].value,
+    monthRevenue: monthRevenue.rows[0].value,
+    totalSalesQuantity: totalSalesQuantity.rows[0].value,
+    lowStockCount: lowStockCount.rows[0].value,
+    totalStock: totalStock.rows[0].value,
+    hotProducts: rowsToCamel(hotProducts.rows),
+    inventoryOverview: rowsToCamel(inventoryOverview.rows)
+  };
+}
+
+async function createDatabaseBackup(type = "manual") {
+  const normalizedType = type === "auto" ? "auto" : "manual";
+  const [schemaRows, users, products, sales, inventory, dashboard, profitReport] = await Promise.all([
+    query(`
+      SELECT table_name, column_name, data_type, is_nullable, column_default
+      FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = ANY($1)
+      ORDER BY table_name, ordinal_position
+    `, [backupTables]),
+    query("SELECT id, username, password_hash, name, display_name, role, is_active, created_at, updated_at FROM users ORDER BY id"),
+    query(`
+      SELECT id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost::text, price::text, stock, low_stock_threshold, notes, created_at, updated_at
+      FROM products
+      ORDER BY id
+    `),
+    query(`
+      SELECT id, product_id, user_id, quantity, sale_unit, cards_per_unit, unit_price::text, total::text, sold_at, created_at
+      FROM sales
+      ORDER BY id
+    `),
+    query(`
+      SELECT id, name, series, rarity, condition, unit, cards_per_unit, package_spec, stock, low_stock_threshold, (cost * stock)::float AS inventory_cost, (price * stock)::float AS inventory_price
+      FROM products
+      ORDER BY name ASC
+    `),
+    getDashboardSnapshot(),
+    getProfitReport()
+  ]);
+
+  const createdAt = new Date().toISOString();
+  const filename = backupFilename(normalizedType);
+  const payload = {
+    metadata: {
+      appName: "Coolcard Tokyo TCG ERP",
+      database: "postgresql",
+      format: "json",
+      type: normalizedType,
+      filename,
+      createdAt,
+      tables: backupTables,
+      storage: backupStorageTargets()
+    },
+    schema: rowsToCamel(schemaRows.rows),
+    data: {
+      users: users.rows,
+      products: products.rows,
+      sales: sales.rows
+    },
+    inventory: rowsToCamel(inventory.rows),
+    reports: {
+      dashboard,
+      profitReport
+    }
+  };
+
+  await ensureBackupDir();
+  const targetPath = path.join(backupDir, filename);
+  await fs.writeFile(targetPath, JSON.stringify(payload, null, 2), "utf8");
+  const stat = await fs.stat(targetPath);
+  return {
+    filename,
+    createdAt,
+    size: stat.size,
+    type: normalizedType,
+    storage: "local"
+  };
+}
+
+async function listBackups() {
+  await ensureBackupDir();
+  const entries = await fs.readdir(backupDir, { withFileTypes: true });
+  const backups = [];
+
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+    try {
+      const filePath = await backupFilePath(entry.name);
+      const [stat, raw] = await Promise.all([
+        fs.stat(filePath),
+        fs.readFile(filePath, "utf8")
+      ]);
+      const parsed = JSON.parse(raw);
+      backups.push({
+        filename: entry.name,
+        createdAt: parsed.metadata?.createdAt ?? stat.birthtime.toISOString(),
+        size: stat.size,
+        type: parsed.metadata?.type ?? (entry.name.includes("-auto-") ? "auto" : "manual")
+      });
+    } catch {
+      continue;
+    }
+  }
+
+  return backups.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+}
+
+async function cleanupOldAutoBackups() {
+  const backups = (await listBackups()).filter((backup) => backup.type === "auto");
+  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const stale = backups.filter((backup, index) => index >= 7 || new Date(backup.createdAt).getTime() < sevenDaysAgo);
+
+  for (const backup of stale) {
+    const filePath = await backupFilePath(backup.filename);
+    await fs.unlink(filePath).catch(() => {});
+  }
+}
+
+async function restoreDatabaseBackup(filename) {
+  const filePath = await backupFilePath(filename);
+  const backup = JSON.parse(await fs.readFile(filePath, "utf8"));
+  const data = backup.data ?? {};
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+    await client.query("TRUNCATE TABLE sales, products, users RESTART IDENTITY CASCADE");
+
+    for (const user of data.users ?? []) {
+      await client.query(
+        `
+          INSERT INTO users (id, username, password_hash, name, display_name, role, is_active, created_at, updated_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8::timestamptz, NOW()), COALESCE($9::timestamptz, NOW()))
+        `,
+        [user.id, user.username, user.password_hash, user.name, user.display_name ?? user.name, user.role, user.is_active !== false, user.created_at, user.updated_at]
+      );
+    }
+
+    for (const product of data.products ?? []) {
+      await client.query(
+        `
+          INSERT INTO products
+            (id, name, series, rarity, condition, unit, cards_per_unit, package_spec, cost, price, stock, low_stock_threshold, notes, created_at, updated_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::numeric, $10::numeric, $11, $12, $13, COALESCE($14::timestamptz, NOW()), COALESCE($15::timestamptz, NOW()))
+        `,
+        [
+          product.id,
+          product.name,
+          product.series,
+          product.rarity,
+          product.condition,
+          product.unit ?? "單張",
+          product.cards_per_unit ?? 1,
+          product.package_spec ?? "單張卡",
+          product.cost,
+          product.price,
+          product.stock ?? 0,
+          product.low_stock_threshold ?? 3,
+          product.notes ?? "",
+          product.created_at,
+          product.updated_at
+        ]
+      );
+    }
+
+    for (const sale of data.sales ?? []) {
+      await client.query(
+        `
+          INSERT INTO sales (id, product_id, user_id, quantity, sale_unit, cards_per_unit, unit_price, total, sold_at, created_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7::numeric, $8::numeric, $9::date, COALESCE($10::timestamptz, NOW()))
+        `,
+        [
+          sale.id,
+          sale.product_id,
+          sale.user_id,
+          sale.quantity,
+          sale.sale_unit ?? "單張",
+          sale.cards_per_unit ?? 1,
+          sale.unit_price,
+          sale.total,
+          sale.sold_at,
+          sale.created_at
+        ]
+      );
+    }
+
+    for (const tableName of backupTables) {
+      await client.query(`
+        SELECT setval(pg_get_serial_sequence('${tableName}', 'id'), COALESCE((SELECT MAX(id) FROM ${tableName}), 1), TRUE)
+      `);
+    }
+
+    await client.query("COMMIT");
+    return { ok: true };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+function startScheduledBackups() {
+  if (process.env.DISABLE_AUTO_BACKUP === "true") return;
+  cron.schedule("0 0 * * *", async () => {
+    try {
+      await createDatabaseBackup("auto");
+      await cleanupOldAutoBackups();
+      console.log("Automatic PostgreSQL backup completed");
+    } catch (error) {
+      console.error("Automatic PostgreSQL backup failed", error);
+    }
+  }, {
+    timezone: process.env.BACKUP_TIMEZONE ?? "Asia/Taipei"
+  });
 }
 
 app.get("/api/health", (_request, response) => {
@@ -898,6 +1179,42 @@ app.post("/api/reports/google-sync", currentUser, requireAdmin, async (_request,
   }
 });
 
+app.get("/api/backups", currentUser, requireAdmin, async (_request, response, next) => {
+  try {
+    response.json(await listBackups());
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/backups/create", currentUser, requireAdmin, async (_request, response, next) => {
+  try {
+    const backup = await createDatabaseBackup("manual");
+    response.status(201).json(backup);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/backups/restore/:filename", currentUser, requireAdmin, async (request, response, next) => {
+  try {
+    await restoreDatabaseBackup(request.params.filename);
+    response.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/backups/:filename", currentUser, requireAdmin, async (request, response, next) => {
+  try {
+    const filePath = await backupFilePath(request.params.filename);
+    await fs.unlink(filePath);
+    response.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.use((error, _request, response, _next) => {
   console.error(error);
   response.status(500).json({ message: "伺服器發生錯誤" });
@@ -908,6 +1225,7 @@ initDb()
     app.listen(port, "0.0.0.0", () => {
       console.log(`Coolcard Tokyo TCG ERP API listening on http://localhost:${port}`);
     });
+    startScheduledBackups();
   })
   .catch((error) => {
     console.error("Failed to initialize PostgreSQL database", error);

@@ -4,6 +4,7 @@ import {
   BarChart3,
   Boxes,
   CalendarDays,
+  Database,
   Edit3,
   LogOut,
   ExternalLink,
@@ -13,6 +14,7 @@ import {
   ShoppingCart,
   Trash2,
   TrendingUp,
+  RotateCcw,
   UserRound,
   Warehouse
 } from "lucide-react";
@@ -39,6 +41,13 @@ const UNIT_OPTIONS = ["單張", "包", "盒", "箱", "組", "其他"];
 
 function formatStock(product) {
   return `${number.format(product.stock ?? 0)} ${product.unit ?? "單張"}`;
+}
+
+function formatBytes(bytes) {
+  if (!bytes) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  return `${(bytes / 1024 ** index).toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
 }
 
 async function api(path, options = {}) {
@@ -203,6 +212,7 @@ function App() {
   const [products, setProducts] = useState([]);
   const [sales, setSales] = useState([]);
   const [employees, setEmployees] = useState([]);
+  const [backups, setBackups] = useState([]);
   const [dashboard, setDashboard] = useState(null);
   const [profitReport, setProfitReport] = useState(null);
   const [syncingSheet, setSyncingSheet] = useState(false);
@@ -238,18 +248,20 @@ function App() {
   const load = async () => {
     if (!auth?.token) return;
     const saleQuery = `?from=${dateRange.from}&to=${dateRange.to}`;
-    const [productRows, saleRows, dashboardRow, profitRow, employeeRows] = await Promise.all([
+    const [productRows, saleRows, dashboardRow, profitRow, employeeRows, backupRows] = await Promise.all([
       api(`/products?q=${encodeURIComponent(query)}`),
       api(`/sales${saleQuery}`),
       api("/dashboard"),
       api("/profit-report"),
-      isAdmin ? api("/users") : Promise.resolve([])
+      isAdmin ? api("/users") : Promise.resolve([]),
+      isAdmin ? api("/backups") : Promise.resolve([])
     ]);
     setProducts(productRows);
     setSales(saleRows);
     setDashboard(dashboardRow);
     setProfitReport(profitRow);
     setEmployees(employeeRows);
+    setBackups(backupRows);
   };
 
   useEffect(() => {
@@ -483,6 +495,44 @@ function App() {
     }
   };
 
+  const createBackup = async () => {
+    setError("");
+    try {
+      await api("/backups/create", { method: "POST", body: JSON.stringify({}) });
+      await load();
+      window.alert("資料庫備份已建立");
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const restoreBackup = async (backup) => {
+    const firstConfirm = window.confirm(`即將使用備份「${backup.filename}」還原資料庫。這會覆蓋目前所有員工、商品與銷售資料，確定繼續？`);
+    if (!firstConfirm) return;
+    const secondConfirm = window.confirm("二次確認：還原後目前資料會被備份內容取代，且無法從介面復原。是否立即還原？");
+    if (!secondConfirm) return;
+
+    setError("");
+    try {
+      await api(`/backups/restore/${encodeURIComponent(backup.filename)}`, { method: "POST", body: JSON.stringify({}) });
+      await load();
+      window.alert("資料庫已還原");
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const deleteBackup = async (backup) => {
+    if (!window.confirm(`確定刪除備份檔「${backup.filename}」？`)) return;
+    setError("");
+    try {
+      await api(`/backups/${encodeURIComponent(backup.filename)}`, { method: "DELETE" });
+      await load();
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
   const logout = () => {
     localStorage.removeItem("pokemon-erp-auth");
     setAuth(null);
@@ -508,7 +558,7 @@ function App() {
             [TrendingUp, "利潤分析"],
             [Boxes, "商品庫存"],
             [ShoppingCart, "銷售管理"],
-            ...(isAdmin ? [[UserRound, "員工管理"]] : [])
+            ...(isAdmin ? [[UserRound, "員工管理"], [Database, "系統備份"]] : [])
           ].map(([Icon, label]) => (
             <a key={label} href={`#${label}`} className="flex items-center gap-3 rounded-md px-3 py-2 hover:bg-slate-100">
               <Icon className="h-4 w-4" />
@@ -1037,6 +1087,70 @@ function App() {
                     </tbody>
                   </table>
                 </div>
+              </div>
+            </section>
+          )}
+
+          {isAdmin && (
+            <section id="系統備份" className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div className="flex items-center gap-2">
+                  <Database className="h-5 w-5 text-slate-700" />
+                  <h2 className="text-lg font-semibold">系統備份</h2>
+                </div>
+                <Button type="button" onClick={createBackup}>
+                  <Database className="h-4 w-4" />
+                  立即備份
+                </Button>
+              </div>
+
+              <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                還原會覆蓋目前 PostgreSQL 資料庫中的員工、商品與銷售資料。備份檔只可透過管理員 API 操作，不提供公開下載。
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[860px] text-left text-sm">
+                  <thead className="border-b border-slate-200 text-xs text-slate-500">
+                    <tr>
+                      <th className="py-3 pr-4">檔名</th>
+                      <th className="py-3 pr-4">建立時間</th>
+                      <th className="py-3 pr-4">檔案大小</th>
+                      <th className="py-3 pr-4">備份類型</th>
+                      <th className="py-3">操作</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {backups.map((backup) => (
+                      <tr key={backup.filename}>
+                        <td className="py-3 pr-4 font-mono text-xs">{backup.filename}</td>
+                        <td className="py-3 pr-4">{new Date(backup.createdAt).toLocaleString("zh-TW")}</td>
+                        <td className="py-3 pr-4">{formatBytes(backup.size)}</td>
+                        <td className="py-3 pr-4">
+                          <span className={`rounded px-2 py-1 text-xs font-medium ${backup.type === "auto" ? "bg-indigo-50 text-indigo-700" : "bg-teal-50 text-teal-700"}`}>
+                            {backup.type}
+                          </span>
+                        </td>
+                        <td className="py-3">
+                          <div className="flex flex-wrap gap-2">
+                            <Button type="button" variant="secondary" onClick={() => restoreBackup(backup)}>
+                              <RotateCcw className="h-4 w-4" />
+                              還原
+                            </Button>
+                            <Button type="button" variant="danger" onClick={() => deleteBackup(backup)}>
+                              <Trash2 className="h-4 w-4" />
+                              刪除
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                    {backups.length === 0 && (
+                      <tr>
+                        <td className="py-6 text-center text-slate-500" colSpan="5">尚無備份紀錄</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
               </div>
             </section>
           )}

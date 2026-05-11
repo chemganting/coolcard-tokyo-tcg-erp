@@ -3,6 +3,7 @@ node_modules/
 client/dist/
 server/*.sqlite
 server/*.sqlite-*
+server/backups/
 .env
 .env.local
 .DS_Store
