@@ -6,6 +6,7 @@ import {
   CalendarDays,
   Edit3,
   LogOut,
+  ExternalLink,
   PackagePlus,
   Search,
   ShieldCheck,
@@ -193,6 +194,8 @@ function App() {
   const [products, setProducts] = useState([]);
   const [sales, setSales] = useState([]);
   const [dashboard, setDashboard] = useState(null);
+  const [profitReport, setProfitReport] = useState(null);
+  const [syncingSheet, setSyncingSheet] = useState(false);
   const [query, setQuery] = useState("");
   const [error, setError] = useState("");
   const [productForm, setProductForm] = useState(emptyProduct);
@@ -221,14 +224,16 @@ function App() {
   const load = async () => {
     if (!auth?.token) return;
     const saleQuery = `?from=${dateRange.from}&to=${dateRange.to}`;
-    const [productRows, saleRows, dashboardRow] = await Promise.all([
+    const [productRows, saleRows, dashboardRow, profitRow] = await Promise.all([
       api(`/products?q=${encodeURIComponent(query)}`),
       api(`/sales${saleQuery}`),
-      api("/dashboard")
+      api("/dashboard"),
+      api("/profit-report")
     ]);
     setProducts(productRows);
     setSales(saleRows);
     setDashboard(dashboardRow);
+    setProfitReport(profitRow);
   };
 
   useEffect(() => {
@@ -352,6 +357,21 @@ function App() {
     }
   };
 
+  const syncGoogleSheet = async () => {
+    setError("");
+    setSyncingSheet(true);
+    try {
+      const result = await api("/reports/google-sync", { method: "POST", body: JSON.stringify({}) });
+      await load();
+      window.alert("已同步到 Google 試算表");
+      if (result.googleSheetUrl) window.open(result.googleSheetUrl, "_blank", "noopener,noreferrer");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSyncingSheet(false);
+    }
+  };
+
   const logout = () => {
     localStorage.removeItem("pokemon-erp-auth");
     setAuth(null);
@@ -374,6 +394,7 @@ function App() {
         <nav className="mt-8 space-y-1 text-sm font-medium text-slate-600">
           {[
             [BarChart3, "營業額儀表板"],
+            [TrendingUp, "利潤分析"],
             [Boxes, "商品庫存"],
             [ShoppingCart, "銷售管理"]
           ].map(([Icon, label]) => (
@@ -418,6 +439,75 @@ function App() {
             <StatCard icon={BarChart3} label="本月營業額" value={currency.format(dashboard?.monthRevenue ?? 0)} detail="當月銷售總額" tone="bg-indigo-50 text-indigo-700" />
             <StatCard icon={ShoppingCart} label="總銷售量" value={`${number.format(dashboard?.totalSalesQuantity ?? 0)} 單位`} detail="所有銷售紀錄累計" tone="bg-amber-50 text-amber-700" />
             <StatCard icon={Boxes} label="低庫存商品數" value={number.format(dashboard?.lowStockCount ?? 0)} detail={`庫存總量 ${number.format(dashboard?.totalStock ?? 0)} 單位`} tone="bg-rose-50 text-rose-700" />
+          </section>
+
+          <section id="利潤分析" className="space-y-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex items-center gap-2">
+                <TrendingUp className="h-5 w-5 text-slate-700" />
+                <h2 className="text-lg font-semibold">利潤分析</h2>
+              </div>
+              {isAdmin && (
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Button type="button" onClick={syncGoogleSheet} disabled={syncingSheet}>
+                    {syncingSheet ? "同步中..." : "同步到 Google 試算表"}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={!profitReport?.googleSheetUrl}
+                    onClick={() => window.open(profitReport.googleSheetUrl, "_blank", "noopener,noreferrer")}
+                  >
+                    <ExternalLink className="h-4 w-4" />
+                    開啟 Google 試算表
+                  </Button>
+                </div>
+              )}
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              <StatCard icon={CalendarDays} label="今日成本" value={currency.format(profitReport?.summary?.todayCost ?? 0)} detail="依今日銷售成本計算" tone="bg-slate-50 text-slate-700" />
+              <StatCard icon={TrendingUp} label="今日毛利" value={currency.format(profitReport?.summary?.todayProfit ?? 0)} detail="今日營業額扣除成本" tone="bg-emerald-50 text-emerald-700" />
+              <StatCard icon={BarChart3} label="今日毛利率" value={`${number.format(profitReport?.summary?.todayMarginRate ?? 0)}%`} detail="毛利 / 營業額" tone="bg-cyan-50 text-cyan-700" />
+              <StatCard icon={TrendingUp} label="本月毛利" value={currency.format(profitReport?.summary?.monthProfit ?? 0)} detail={`本月營業額 ${currency.format(profitReport?.summary?.monthRevenue ?? 0)}`} tone="bg-indigo-50 text-indigo-700" />
+            </div>
+
+            <div className="grid gap-6 xl:grid-cols-2">
+              <div>
+                <h3 className="mb-3 font-semibold text-slate-900">熱銷商品排行</h3>
+                <div className="space-y-3">
+                  {(profitReport?.hotRankingRows ?? []).slice(0, 5).map((item) => (
+                    <div key={`${item.rank}-${item.productName}`} className="flex items-center justify-between rounded-md border border-slate-200 p-3">
+                      <div>
+                        <p className="font-medium">{item.rank}. {item.productName}</p>
+                        <p className="text-sm text-slate-500">毛利率 {number.format(item.marginRate)}%</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="font-semibold">{currency.format(item.profit)}</p>
+                        <p className="text-sm text-slate-500">{number.format(item.quantity)} 單位</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <h3 className="mb-3 font-semibold text-slate-900">低庫存商品排行</h3>
+                <div className="space-y-3">
+                  {(profitReport?.lowStockRows ?? []).slice(0, 5).map((item) => (
+                    <div key={item.id} className="flex items-center justify-between rounded-md border border-slate-200 p-3">
+                      <div>
+                        <p className="font-medium">{item.name}</p>
+                        <p className="text-sm text-slate-500">{item.series} · {item.rarity} · {item.packageSpec}</p>
+                      </div>
+                      <span className="rounded bg-rose-50 px-2 py-1 text-xs font-medium text-rose-700">
+                        {formatStock(item)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
           </section>
 
           <section className="grid gap-6 xl:grid-cols-2">

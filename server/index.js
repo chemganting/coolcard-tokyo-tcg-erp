@@ -1,6 +1,7 @@
 import cors from "cors";
 import bcrypt from "bcryptjs";
 import express from "express";
+import { google } from "googleapis";
 import jwt from "jsonwebtoken";
 import morgan from "morgan";
 import { initDb, pool, query, rowsToCamel, toCamel } from "./db.js";
@@ -9,6 +10,7 @@ const app = express();
 const port = process.env.PORT ?? 4000;
 const jwtSecret = process.env.JWT_SECRET ?? "local-development-secret-change-me";
 const allowedUnits = new Set(["單張", "包", "盒", "箱", "組", "其他"]);
+const reportSheetTabs = ["今日營收", "庫存總表", "熱銷排行"];
 
 function publicUser(row) {
   const user = toCamel(row);
@@ -89,6 +91,221 @@ function validateProduct(product) {
     product.price >= 0 &&
     product.stock >= 0 &&
     product.lowStockThreshold >= 0;
+}
+
+function grossMargin(revenue, cost) {
+  return revenue === 0 ? 0 : ((revenue - cost) / revenue) * 100;
+}
+
+async function getProfitReport() {
+  const [
+    todaySummary,
+    monthSummary,
+    todayRevenueRows,
+    inventoryRows,
+    hotRankingRows,
+    lowStockRows
+  ] = await Promise.all([
+    query(`
+      SELECT
+        COALESCE(SUM(sales.total), 0)::float AS revenue,
+        COALESCE(SUM(products.cost * sales.quantity), 0)::float AS cost,
+        COALESCE(SUM(sales.quantity), 0)::int AS quantity
+      FROM sales
+      JOIN products ON products.id = sales.product_id
+      WHERE sales.sold_at = CURRENT_DATE
+    `),
+    query(`
+      SELECT
+        COALESCE(SUM(sales.total), 0)::float AS revenue,
+        COALESCE(SUM(products.cost * sales.quantity), 0)::float AS cost
+      FROM sales
+      JOIN products ON products.id = sales.product_id
+      WHERE date_trunc('month', sales.sold_at) = date_trunc('month', CURRENT_DATE)
+    `),
+    query(`
+      SELECT
+        to_char(sales.sold_at, 'YYYY-MM-DD') AS date,
+        products.name AS product_name,
+        sales.quantity,
+        sales.unit_price::float AS unit_price,
+        sales.total::float AS total,
+        (products.cost * sales.quantity)::float AS cost,
+        (sales.total - products.cost * sales.quantity)::float AS profit,
+        CASE WHEN sales.total = 0 THEN 0 ELSE ((sales.total - products.cost * sales.quantity) / sales.total * 100)::float END AS margin_rate,
+        users.name AS staff_name
+      FROM sales
+      JOIN products ON products.id = sales.product_id
+      JOIN users ON users.id = sales.user_id
+      WHERE sales.sold_at = CURRENT_DATE
+      ORDER BY sales.id DESC
+    `),
+    query(`
+      SELECT
+        name,
+        series,
+        rarity,
+        condition,
+        unit,
+        package_spec,
+        cost::float AS cost,
+        price::float AS price,
+        stock,
+        (cost * stock)::float AS inventory_cost,
+        (price * stock)::float AS inventory_price,
+        ((price - cost) * stock)::float AS estimated_profit
+      FROM products
+      ORDER BY stock ASC, name ASC
+    `),
+    query(`
+      SELECT
+        products.name AS product_name,
+        COALESCE(SUM(sales.quantity), 0)::int AS quantity,
+        COALESCE(SUM(sales.total), 0)::float AS revenue,
+        COALESCE(SUM(products.cost * sales.quantity), 0)::float AS cost,
+        COALESCE(SUM(sales.total - products.cost * sales.quantity), 0)::float AS profit,
+        CASE WHEN COALESCE(SUM(sales.total), 0) = 0 THEN 0
+             ELSE (SUM(sales.total - products.cost * sales.quantity) / SUM(sales.total) * 100)::float
+        END AS margin_rate
+      FROM sales
+      JOIN products ON products.id = sales.product_id
+      GROUP BY products.id, products.name
+      ORDER BY quantity DESC, revenue DESC
+      LIMIT 10
+    `),
+    query(`
+      SELECT id, name, series, rarity, unit, package_spec, stock, low_stock_threshold
+      FROM products
+      WHERE stock <= low_stock_threshold
+      ORDER BY stock ASC, name ASC
+      LIMIT 10
+    `)
+  ]);
+
+  const today = todaySummary.rows[0];
+  const month = monthSummary.rows[0];
+  const todayProfit = today.revenue - today.cost;
+  const monthProfit = month.revenue - month.cost;
+
+  return {
+    summary: {
+      todayRevenue: today.revenue,
+      todayCost: today.cost,
+      todayProfit,
+      todayMarginRate: grossMargin(today.revenue, today.cost),
+      monthRevenue: month.revenue,
+      monthProfit,
+      totalSalesQuantity: today.quantity
+    },
+    todayRevenueRows: rowsToCamel(todayRevenueRows.rows),
+    inventoryRows: rowsToCamel(inventoryRows.rows),
+    hotRankingRows: rowsToCamel(hotRankingRows.rows).map((row, index) => ({ rank: index + 1, ...row })),
+    lowStockRows: rowsToCamel(lowStockRows.rows)
+  };
+}
+
+function serviceAccountCredentials() {
+  const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  if (!raw) throw new Error("GOOGLE_SERVICE_ACCOUNT_JSON is not configured");
+
+  const parsed = JSON.parse(raw);
+  if (parsed.private_key) {
+    parsed.private_key = parsed.private_key.replace(/\\n/g, "\n");
+  }
+  return parsed;
+}
+
+async function googleSheetsClient() {
+  const auth = new google.auth.GoogleAuth({
+    credentials: serviceAccountCredentials(),
+    scopes: ["https://www.googleapis.com/auth/spreadsheets"]
+  });
+  return google.sheets({ version: "v4", auth });
+}
+
+function sheetValues(report) {
+  return {
+    "今日營收": [
+      ["日期", "商品名稱", "數量", "單價", "總金額", "成本", "毛利", "毛利率", "店員"],
+      ...report.todayRevenueRows.map((row) => [
+        row.date,
+        row.productName,
+        row.quantity,
+        row.unitPrice,
+        row.total,
+        row.cost,
+        row.profit,
+        `${row.marginRate.toFixed(2)}%`,
+        row.staffName
+      ])
+    ],
+    "庫存總表": [
+      ["商品名稱", "系列", "稀有度", "卡況", "單位", "包裝規格", "進貨成本", "售價", "庫存數量", "庫存總成本", "預估庫存售價", "預估毛利"],
+      ...report.inventoryRows.map((row) => [
+        row.name,
+        row.series,
+        row.rarity,
+        row.condition,
+        row.unit,
+        row.packageSpec,
+        row.cost,
+        row.price,
+        row.stock,
+        row.inventoryCost,
+        row.inventoryPrice,
+        row.estimatedProfit
+      ])
+    ],
+    "熱銷排行": [
+      ["排名", "商品名稱", "銷售數量", "營業額", "成本", "毛利", "毛利率"],
+      ...report.hotRankingRows.map((row) => [
+        row.rank,
+        row.productName,
+        row.quantity,
+        row.revenue,
+        row.cost,
+        row.profit,
+        `${row.marginRate.toFixed(2)}%`
+      ])
+    ]
+  };
+}
+
+async function ensureSheetTabs(sheets, spreadsheetId) {
+  const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
+  const existing = new Set(spreadsheet.data.sheets?.map((sheet) => sheet.properties?.title).filter(Boolean));
+  const requests = reportSheetTabs
+    .filter((title) => !existing.has(title))
+    .map((title) => ({ addSheet: { properties: { title } } }));
+
+  if (requests.length > 0) {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: { requests }
+    });
+  }
+}
+
+async function syncReportToGoogleSheets(report) {
+  const spreadsheetId = process.env.GOOGLE_SHEET_ID;
+  if (!spreadsheetId) throw new Error("GOOGLE_SHEET_ID is not configured");
+
+  const sheets = await googleSheetsClient();
+  await ensureSheetTabs(sheets, spreadsheetId);
+  const values = sheetValues(report);
+
+  for (const [title, rows] of Object.entries(values)) {
+    await sheets.spreadsheets.values.clear({
+      spreadsheetId,
+      range: `'${title}'`
+    });
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `'${title}'!A1`,
+      valueInputOption: "USER_ENTERED",
+      requestBody: { values: rows }
+    });
+  }
 }
 
 app.get("/api/health", (_request, response) => {
@@ -506,6 +723,31 @@ app.get("/api/dashboard", currentUser, async (_request, response, next) => {
       totalStock: totalStock.rows[0].value,
       hotProducts: rowsToCamel(hotProducts.rows),
       inventoryOverview: rowsToCamel(inventoryOverview.rows)
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/profit-report", currentUser, async (_request, response, next) => {
+  try {
+    const report = await getProfitReport();
+    response.json({
+      ...report,
+      googleSheetUrl: process.env.GOOGLE_SHEET_URL ?? ""
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/reports/google-sync", currentUser, requireAdmin, async (_request, response, next) => {
+  try {
+    const report = await getProfitReport();
+    await syncReportToGoogleSheets(report);
+    response.json({
+      ok: true,
+      googleSheetUrl: process.env.GOOGLE_SHEET_URL ?? ""
     });
   } catch (error) {
     next(error);

@@ -58,6 +58,9 @@ npm run client
   - `ADMIN_PASSWORD=<initial admin password>`
   - `CLERK_PASSWORD=<initial clerk password>`
   - `DATABASE_URL=<Neon PostgreSQL connection string>`
+  - `GOOGLE_SERVICE_ACCOUNT_JSON=<Google service account JSON>`
+  - `GOOGLE_SHEET_ID=<Google Spreadsheet ID>`
+  - `GOOGLE_SHEET_URL=<Google Spreadsheet URL>`
 
 ### Vercel 前端
 
