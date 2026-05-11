@@ -135,6 +135,15 @@ const emptyProduct = {
   notes: ""
 };
 
+const emptyEmployee = {
+  username: "",
+  name: "",
+  displayName: "",
+  role: "clerk",
+  password: "",
+  isActive: true
+};
+
 function Login({ onLogin }) {
   const [form, setForm] = useState({ username: "admin", password: "admin123" });
   const [error, setError] = useState("");
@@ -193,12 +202,16 @@ function App() {
   const [auth, setAuth] = useState(authFromStorage());
   const [products, setProducts] = useState([]);
   const [sales, setSales] = useState([]);
+  const [employees, setEmployees] = useState([]);
   const [dashboard, setDashboard] = useState(null);
   const [profitReport, setProfitReport] = useState(null);
   const [syncingSheet, setSyncingSheet] = useState(false);
   const [query, setQuery] = useState("");
   const [error, setError] = useState("");
   const [productForm, setProductForm] = useState(emptyProduct);
+  const [employeeForm, setEmployeeForm] = useState(emptyEmployee);
+  const [editingEmployeeId, setEditingEmployeeId] = useState(null);
+  const [passwordByUser, setPasswordByUser] = useState({});
   const [importCsv, setImportCsv] = useState("");
   const [editingId, setEditingId] = useState(null);
   const [saleForm, setSaleForm] = useState({ productId: "", quantity: 1, saleUnit: "單張", cardsPerUnit: "1", unitPrice: "", soldAt: new Date().toISOString().slice(0, 10) });
@@ -224,16 +237,18 @@ function App() {
   const load = async () => {
     if (!auth?.token) return;
     const saleQuery = `?from=${dateRange.from}&to=${dateRange.to}`;
-    const [productRows, saleRows, dashboardRow, profitRow] = await Promise.all([
+    const [productRows, saleRows, dashboardRow, profitRow, employeeRows] = await Promise.all([
       api(`/products?q=${encodeURIComponent(query)}`),
       api(`/sales${saleQuery}`),
       api("/dashboard"),
-      api("/profit-report")
+      api("/profit-report"),
+      isAdmin ? api("/users") : Promise.resolve([])
     ]);
     setProducts(productRows);
     setSales(saleRows);
     setDashboard(dashboardRow);
     setProfitReport(profitRow);
+    setEmployees(employeeRows);
   };
 
   useEffect(() => {
@@ -357,6 +372,79 @@ function App() {
     }
   };
 
+  const submitEmployee = async (event) => {
+    event.preventDefault();
+    setError("");
+    try {
+      const payload = {
+        username: employeeForm.username,
+        name: employeeForm.name,
+        displayName: employeeForm.displayName || employeeForm.name,
+        role: employeeForm.role,
+        isActive: employeeForm.isActive
+      };
+      if (editingEmployeeId) {
+        await api(`/users/${editingEmployeeId}`, { method: "PUT", body: JSON.stringify(payload) });
+      } else {
+        await api("/users", { method: "POST", body: JSON.stringify({ ...payload, password: employeeForm.password }) });
+      }
+      setEmployeeForm(emptyEmployee);
+      setEditingEmployeeId(null);
+      await load();
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const editEmployee = (employee) => {
+    setEditingEmployeeId(employee.id);
+    setEmployeeForm({
+      username: employee.username,
+      name: employee.name,
+      displayName: employee.displayName || employee.name,
+      role: employee.role,
+      password: "",
+      isActive: employee.isActive
+    });
+  };
+
+  const updateEmployeePassword = async (employee) => {
+    const password = passwordByUser[employee.id] ?? "";
+    if (!password) return;
+    setError("");
+    try {
+      await api(`/users/${employee.id}/password`, { method: "PATCH", body: JSON.stringify({ password }) });
+      setPasswordByUser((current) => ({ ...current, [employee.id]: "" }));
+      window.alert("密碼已更新");
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const toggleEmployeeStatus = async (employee) => {
+    setError("");
+    try {
+      await api(`/users/${employee.id}/status`, {
+        method: "PATCH",
+        body: JSON.stringify({ isActive: !employee.isActive })
+      });
+      await load();
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const deleteEmployee = async (employee) => {
+    if (!window.confirm(`確定刪除員工「${employee.displayName || employee.name}」？`)) return;
+    setError("");
+    try {
+      await api(`/users/${employee.id}`, { method: "DELETE" });
+      await load();
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
   const syncGoogleSheet = async () => {
     setError("");
     setSyncingSheet(true);
@@ -396,7 +484,8 @@ function App() {
             [BarChart3, "營業額儀表板"],
             [TrendingUp, "利潤分析"],
             [Boxes, "商品庫存"],
-            [ShoppingCart, "銷售管理"]
+            [ShoppingCart, "銷售管理"],
+            ...(isAdmin ? [[UserRound, "員工管理"]] : [])
           ].map(([Icon, label]) => (
             <a key={label} href={`#${label}`} className="flex items-center gap-3 rounded-md px-3 py-2 hover:bg-slate-100">
               <Icon className="h-4 w-4" />
@@ -761,6 +850,142 @@ function App() {
               </div>
             </div>
           </section>
+
+          {isAdmin && (
+            <section id="員工管理" className="grid gap-6 xl:grid-cols-[0.75fr_1.25fr]">
+              <form onSubmit={submitEmployee} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="mb-4 flex items-center gap-2">
+                  <UserRound className="h-5 w-5 text-slate-700" />
+                  <h2 className="text-lg font-semibold">{editingEmployeeId ? "編輯員工" : "新增員工"}</h2>
+                </div>
+                <div className="grid gap-3">
+                  <TextInput
+                    required
+                    disabled={Boolean(editingEmployeeId)}
+                    placeholder="username"
+                    value={employeeForm.username}
+                    onChange={(e) => setEmployeeForm({ ...employeeForm, username: e.target.value })}
+                  />
+                  <TextInput
+                    required
+                    placeholder="員工名稱"
+                    value={employeeForm.name}
+                    onChange={(e) => setEmployeeForm({ ...employeeForm, name: e.target.value })}
+                  />
+                  <TextInput
+                    required
+                    placeholder="顯示名稱"
+                    value={employeeForm.displayName}
+                    onChange={(e) => setEmployeeForm({ ...employeeForm, displayName: e.target.value })}
+                  />
+                  <SelectInput value={employeeForm.role} onChange={(e) => setEmployeeForm({ ...employeeForm, role: e.target.value })}>
+                    <option value="admin">admin</option>
+                    <option value="clerk">clerk</option>
+                  </SelectInput>
+                  {!editingEmployeeId && (
+                    <TextInput
+                      required
+                      type="password"
+                      minLength="6"
+                      placeholder="初始密碼，至少 6 碼"
+                      value={employeeForm.password}
+                      onChange={(e) => setEmployeeForm({ ...employeeForm, password: e.target.value })}
+                    />
+                  )}
+                  <label className="flex items-center gap-2 text-sm text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={employeeForm.isActive}
+                      onChange={(e) => setEmployeeForm({ ...employeeForm, isActive: e.target.checked })}
+                    />
+                    啟用帳號
+                  </label>
+                  <div className="flex gap-2">
+                    <Button type="submit">{editingEmployeeId ? "儲存員工" : "建立員工"}</Button>
+                    {editingEmployeeId && (
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={() => {
+                          setEditingEmployeeId(null);
+                          setEmployeeForm(emptyEmployee);
+                        }}
+                      >
+                        取消
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </form>
+
+              <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="mb-4 flex items-center gap-2">
+                  <UserRound className="h-5 w-5 text-slate-700" />
+                  <h2 className="text-lg font-semibold">所有員工</h2>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[980px] text-left text-sm">
+                    <thead className="border-b border-slate-200 text-xs text-slate-500">
+                      <tr>
+                        <th className="py-3 pr-4">username</th>
+                        <th className="py-3 pr-4">name</th>
+                        <th className="py-3 pr-4">displayName</th>
+                        <th className="py-3 pr-4">role</th>
+                        <th className="py-3 pr-4">狀態</th>
+                        <th className="py-3 pr-4">createdAt</th>
+                        <th className="py-3 pr-4">updatedAt</th>
+                        <th className="py-3">操作</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {employees.map((employee) => (
+                        <tr key={employee.id}>
+                          <td className="py-3 pr-4 font-mono text-xs">{employee.username}</td>
+                          <td className="py-3 pr-4">{employee.name}</td>
+                          <td className="py-3 pr-4">{employee.displayName}</td>
+                          <td className="py-3 pr-4">
+                            <span className="rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">{employee.role}</span>
+                          </td>
+                          <td className="py-3 pr-4">
+                            <span className={`rounded px-2 py-1 text-xs font-medium ${employee.isActive ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}>
+                              {employee.isActive ? "啟用" : "停用"}
+                            </span>
+                          </td>
+                          <td className="py-3 pr-4">{new Date(employee.createdAt).toLocaleDateString("zh-TW")}</td>
+                          <td className="py-3 pr-4">{new Date(employee.updatedAt).toLocaleDateString("zh-TW")}</td>
+                          <td className="py-3">
+                            <div className="flex flex-wrap gap-2">
+                              <Button type="button" variant="secondary" onClick={() => editEmployee(employee)}>
+                                <Edit3 className="h-4 w-4" />
+                              </Button>
+                              <Button type="button" variant="secondary" onClick={() => toggleEmployeeStatus(employee)}>
+                                {employee.isActive ? "停用" : "啟用"}
+                              </Button>
+                              <Button type="button" variant="danger" disabled={employee.id === auth.user.id} onClick={() => deleteEmployee(employee)}>
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                            <div className="mt-2 flex gap-2">
+                              <TextInput
+                                type="password"
+                                minLength="6"
+                                placeholder="新密碼"
+                                value={passwordByUser[employee.id] ?? ""}
+                                onChange={(e) => setPasswordByUser((current) => ({ ...current, [employee.id]: e.target.value }))}
+                              />
+                              <Button type="button" variant="secondary" onClick={() => updateEmployeePassword(employee)}>
+                                改密碼
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </section>
+          )}
         </div>
       </main>
     </div>

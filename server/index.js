@@ -19,7 +19,8 @@ function publicUser(row) {
     username: user.username,
     name: user.name,
     displayName: user.displayName ?? user.name,
-    role: user.role
+    role: user.role,
+    isActive: user.isActive ?? true
   };
 }
 
@@ -45,9 +46,9 @@ async function currentUser(request, response, next) {
 
   try {
     const payload = jwt.verify(token, jwtSecret);
-    const { rows } = await query("SELECT id, username, name, role FROM users WHERE id = $1", [payload.sub]);
+    const { rows } = await query("SELECT id, username, name, display_name, role, is_active FROM users WHERE id = $1", [payload.sub]);
     const row = rows[0];
-    if (!row) return response.status(401).json({ message: "請先登入" });
+    if (!row || row.is_active === false) return response.status(401).json({ message: "請先登入" });
     request.user = publicUser(row);
     next();
   } catch (error) {
@@ -316,13 +317,16 @@ app.post("/api/login", async (request, response, next) => {
   const { username, password } = request.body;
   try {
     const { rows } = await query(
-      "SELECT id, username, password_hash, name, role FROM users WHERE username = $1",
+      "SELECT id, username, password_hash, name, display_name, role, is_active FROM users WHERE username = $1",
       [username]
     );
     const row = rows[0];
 
     if (!row || !bcrypt.compareSync(String(password ?? ""), row.password_hash ?? "")) {
       return response.status(401).json({ message: "帳號或密碼錯誤" });
+    }
+    if (row.is_active === false) {
+      return response.status(403).json({ message: "此帳號已停用" });
     }
 
     const user = publicUser(row);
@@ -339,6 +343,146 @@ app.post("/api/login", async (request, response, next) => {
 
 app.get("/api/me", currentUser, (request, response) => {
   response.json(request.user);
+});
+
+async function activeAdminCount() {
+  const { rows } = await query("SELECT COUNT(*)::int AS count FROM users WHERE role = 'admin' AND is_active = TRUE");
+  return rows[0].count;
+}
+
+async function isLastActiveAdmin(userId) {
+  const { rows } = await query("SELECT role, is_active FROM users WHERE id = $1", [userId]);
+  const user = rows[0];
+  return user?.role === "admin" && user.is_active === true && (await activeAdminCount()) <= 1;
+}
+
+function userPayload(body) {
+  return {
+    username: String(body.username ?? "").trim(),
+    name: String(body.name ?? "").trim(),
+    displayName: String(body.displayName ?? body.name ?? "").trim(),
+    role: ["admin", "clerk"].includes(body.role) ? body.role : "clerk",
+    isActive: body.isActive !== false
+  };
+}
+
+function validateUserPayload(user) {
+  return Boolean(user.username && user.name && user.displayName && ["admin", "clerk"].includes(user.role));
+}
+
+app.get("/api/users", currentUser, requireAdmin, async (_request, response, next) => {
+  try {
+    const { rows } = await query(`
+      SELECT id, username, name, display_name, role, is_active, created_at, updated_at
+      FROM users
+      ORDER BY created_at DESC, id DESC
+    `);
+    response.json(rowsToCamel(rows));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/users", currentUser, requireAdmin, async (request, response, next) => {
+  const user = userPayload(request.body);
+  const password = String(request.body.password ?? "");
+  if (!validateUserPayload(user) || password.length < 6) {
+    return response.status(400).json({ message: "員工資料不完整，密碼至少 6 碼" });
+  }
+
+  try {
+    const { rows } = await query(
+      `
+        INSERT INTO users (username, password_hash, name, display_name, role, is_active)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING id
+      `,
+      [user.username, bcrypt.hashSync(password, 12), user.name, user.displayName, user.role, user.isActive]
+    );
+    response.status(201).json({ id: rows[0].id });
+  } catch (error) {
+    if (error.code === "23505") return response.status(409).json({ message: "帳號已存在" });
+    next(error);
+  }
+});
+
+app.put("/api/users/:id", currentUser, requireAdmin, async (request, response, next) => {
+  const userId = Number(request.params.id);
+  const user = userPayload(request.body);
+  if (!validateUserPayload(user)) return response.status(400).json({ message: "員工資料不完整" });
+
+  try {
+    if (user.role !== "admin" && await isLastActiveAdmin(userId)) {
+      return response.status(409).json({ message: "不允許移除最後一個 admin" });
+    }
+
+    const result = await query(
+      `
+        UPDATE users
+        SET name = $1, display_name = $2, role = $3, updated_at = NOW()
+        WHERE id = $4
+      `,
+      [user.name, user.displayName, user.role, userId]
+    );
+    if (result.rowCount === 0) return response.status(404).json({ message: "員工不存在" });
+    response.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch("/api/users/:id/password", currentUser, requireAdmin, async (request, response, next) => {
+  const password = String(request.body.password ?? "");
+  if (password.length < 6) return response.status(400).json({ message: "密碼至少 6 碼" });
+
+  try {
+    const result = await query(
+      "UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2",
+      [bcrypt.hashSync(password, 12), Number(request.params.id)]
+    );
+    if (result.rowCount === 0) return response.status(404).json({ message: "員工不存在" });
+    response.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch("/api/users/:id/status", currentUser, requireAdmin, async (request, response, next) => {
+  const userId = Number(request.params.id);
+  const isActive = request.body.isActive === true;
+
+  try {
+    if (!isActive && await isLastActiveAdmin(userId)) {
+      return response.status(409).json({ message: "不允許停用最後一個 admin" });
+    }
+
+    const result = await query(
+      "UPDATE users SET is_active = $1, updated_at = NOW() WHERE id = $2",
+      [isActive, userId]
+    );
+    if (result.rowCount === 0) return response.status(404).json({ message: "員工不存在" });
+    response.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/users/:id", currentUser, requireAdmin, async (request, response, next) => {
+  const userId = Number(request.params.id);
+  if (userId === request.user.id) return response.status(409).json({ message: "不允許刪除目前登入中的自己" });
+
+  try {
+    if (await isLastActiveAdmin(userId)) {
+      return response.status(409).json({ message: "不允許刪除最後一個 admin" });
+    }
+
+    const result = await query("DELETE FROM users WHERE id = $1", [userId]);
+    if (result.rowCount === 0) return response.status(404).json({ message: "員工不存在" });
+    response.json({ ok: true });
+  } catch (error) {
+    if (error.code === "23503") return response.status(409).json({ message: "此員工已有銷售紀錄，無法刪除，可改為停用" });
+    next(error);
+  }
 });
 
 app.get("/api/products", currentUser, async (request, response, next) => {

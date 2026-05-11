@@ -107,8 +107,11 @@ export async function initDb() {
         username TEXT NOT NULL UNIQUE,
         password_hash TEXT,
         name TEXT NOT NULL,
+        display_name TEXT,
         role TEXT NOT NULL CHECK (role IN ('admin', 'clerk')),
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        is_active BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
 
       CREATE TABLE IF NOT EXISTS products (
@@ -144,6 +147,9 @@ export async function initDb() {
     `);
 
     await client.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT");
+    await client.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT");
+    await client.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE");
+    await client.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()");
     await client.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS unit TEXT NOT NULL DEFAULT '單張'");
     await client.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS cards_per_unit INTEGER NOT NULL DEFAULT 1");
     await client.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS package_spec TEXT NOT NULL DEFAULT '單張卡'");
@@ -155,6 +161,8 @@ export async function initDb() {
     await client.query("UPDATE products SET package_spec = '單張卡' WHERE package_spec IS NULL OR package_spec = ''");
     await client.query("UPDATE sales SET sale_unit = '單張' WHERE sale_unit IS NULL OR sale_unit = ''");
     await client.query("UPDATE sales SET cards_per_unit = 1 WHERE cards_per_unit IS NULL OR cards_per_unit <= 0");
+    await client.query("UPDATE users SET display_name = name WHERE display_name IS NULL OR display_name = ''");
+    await client.query("UPDATE users SET is_active = TRUE WHERE is_active IS NULL");
 
     await migrateLegacyPassword(client);
 
@@ -178,12 +186,12 @@ async function seedData(client) {
   const clerkPasswordHash = bcrypt.hashSync(process.env.CLERK_PASSWORD ?? "clerk123", 12);
 
   const admin = await client.query(
-    "INSERT INTO users (username, password_hash, name, role) VALUES ($1, $2, $3, $4) RETURNING id",
-    ["admin", adminPasswordHash, "Brian", "admin"]
+    "INSERT INTO users (username, password_hash, name, display_name, role) VALUES ($1, $2, $3, $4, $5) RETURNING id",
+    ["admin", adminPasswordHash, "Brian", "Brian", "admin"]
   );
   const clerk = await client.query(
-    "INSERT INTO users (username, password_hash, name, role) VALUES ($1, $2, $3, $4) RETURNING id",
-    ["clerk", clerkPasswordHash, "店員 小霞", "clerk"]
+    "INSERT INTO users (username, password_hash, name, display_name, role) VALUES ($1, $2, $3, $4, $5) RETURNING id",
+    ["clerk", clerkPasswordHash, "店員 小霞", "店員 小霞", "clerk"]
   );
 
   const seedProducts = [
