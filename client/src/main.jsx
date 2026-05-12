@@ -725,6 +725,7 @@ function App() {
   const [mobileOrderTab, setMobileOrderTab] = useState("待處理");
   const [mobileDrawer, setMobileDrawer] = useState(null);
   const [shippingAssistantOrderId, setShippingAssistantOrderId] = useState(null);
+  const [saleOpen, setSaleOpen] = useState(false);
   const productFormRef = useRef(null);
   const purchaseFormRef = useRef(null);
   const [error, setError] = useState("");
@@ -936,6 +937,9 @@ function App() {
     const start = (currentSalePage - 1) * LIST_PAGE_SIZE;
     return filteredSales.slice(start, start + LIST_PAGE_SIZE);
   }, [filteredSales, currentSalePage]);
+  const latestSaleTime = filteredSales[0]?.soldAt
+    ? new Date(filteredSales[0].soldAt).toLocaleDateString("zh-TW")
+    : "尚無銷售";
   const orderProducts = useMemo(() => {
     const keyword = orderProductSearch.trim().toLowerCase();
     return products.filter((product) => {
@@ -3057,95 +3061,117 @@ function App() {
             </div>
           </section>
 
-          <section id="銷售管理" className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-            <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex items-center gap-2">
-                <CalendarDays className="h-5 w-5 text-slate-700" />
-                <div>
-                  <h2 className="text-lg font-semibold">銷售紀錄</h2>
-                  <p className="mt-1 text-sm text-slate-500">成交歷史由訂單完成自動產生，這裡僅供查詢。</p>
+          <section id="銷售管理" className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+            <button
+              type="button"
+              onClick={() => setSaleOpen((current) => !current)}
+              aria-expanded={saleOpen}
+              className="flex w-full items-center justify-between gap-3 px-4 py-4 text-left transition hover:bg-slate-50"
+            >
+              <div className="min-w-0">
+                <h2 className="truncate text-lg font-semibold text-slate-950">銷售紀錄</h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  總筆數 {number.format(filteredSales.length)} 筆 · 最近一筆銷售時間 {latestSaleTime}
+                </p>
+              </div>
+              <ChevronDown className={`h-4 w-4 shrink-0 text-slate-500 transition-transform duration-300 ${saleOpen ? "rotate-180" : ""}`} />
+            </button>
+            <div
+              className="overflow-hidden transition-[max-height,opacity] duration-300 ease-out"
+              style={{ maxHeight: saleOpen ? "5000px" : "0px", opacity: saleOpen ? 1 : 0 }}
+              aria-hidden={!saleOpen}
+            >
+              <div className="border-t border-slate-200 p-4">
+                <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-center gap-2">
+                    <CalendarDays className="h-5 w-5 text-slate-700" />
+                    <div>
+                      <h3 className="text-base font-semibold">成交歷史</h3>
+                      <p className="mt-1 text-sm text-slate-500">成交歷史由訂單完成自動產生，這裡僅供查詢。</p>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <TextInput type="date" value={dateRange.from} onChange={(e) => setDateRange({ ...dateRange, from: e.target.value })} />
+                    <TextInput type="date" value={dateRange.to} onChange={(e) => setDateRange({ ...dateRange, to: e.target.value })} />
+                  </div>
                 </div>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <TextInput type="date" value={dateRange.from} onChange={(e) => setDateRange({ ...dateRange, from: e.target.value })} />
-                <TextInput type="date" value={dateRange.to} onChange={(e) => setDateRange({ ...dateRange, to: e.target.value })} />
-              </div>
-            </div>
-            <div className="grid gap-2 rounded-lg bg-slate-50 px-4 py-3 text-sm text-slate-600 sm:grid-cols-3">
-              <div>總筆數：<span className="font-semibold text-slate-950">{number.format(filteredSales.length)}</span></div>
-              <div>已完成訂單成交：<span className="font-semibold text-slate-950">{number.format(filteredSales.filter((sale) => sale.orderId).length)}</span></div>
-              <div>手動成交舊資料：<span className="font-semibold text-slate-950">{number.format(filteredSales.filter((sale) => !sale.orderId).length)}</span></div>
-            </div>
-            <div className="hidden overflow-x-auto lg:block">
-              <table className="min-w-full table-auto text-left text-sm">
-                <thead className="border-b border-slate-200 text-xs text-slate-500">
-                  <tr>
-                    <th className="py-3 pr-4">日期</th>
-                    <th className="py-3 pr-4">來源訂單</th>
-                    <th className="py-3 pr-4">商品</th>
-                    <th className="py-3 pr-4">數量/單位</th>
-                    <th className="py-3 pr-4">規格</th>
-                    <th className="py-3 pr-4">單價</th>
-                    <th className="py-3 pr-4">總金額</th>
-                    <th className="py-3 pr-4">店員</th>
-                    <th className="py-3 pr-4">狀態</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
+                <div className="grid gap-2 rounded-lg bg-slate-50 px-4 py-3 text-sm text-slate-600 sm:grid-cols-3">
+                  <div>總筆數：<span className="font-semibold text-slate-950">{number.format(filteredSales.length)}</span></div>
+                  <div>已完成訂單成交：<span className="font-semibold text-slate-950">{number.format(filteredSales.filter((sale) => sale.orderId).length)}</span></div>
+                  <div>手動成交舊資料：<span className="font-semibold text-slate-950">{number.format(filteredSales.filter((sale) => !sale.orderId).length)}</span></div>
+                </div>
+                <div className="hidden overflow-x-auto lg:block">
+                  <table className="min-w-full table-auto text-left text-sm">
+                    <thead className="border-b border-slate-200 text-xs text-slate-500">
+                      <tr>
+                        <th className="py-3 pr-4">日期</th>
+                        <th className="py-3 pr-4">來源訂單</th>
+                        <th className="py-3 pr-4">商品</th>
+                        <th className="py-3 pr-4">數量/單位</th>
+                        <th className="py-3 pr-4">規格</th>
+                        <th className="py-3 pr-4">單價</th>
+                        <th className="py-3 pr-4">總金額</th>
+                        <th className="py-3 pr-4">店員</th>
+                        <th className="py-3 pr-4">狀態</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {visibleSales.map((sale) => (
+                        <tr key={sale.id}>
+                          <td className="py-3 pr-4">{sale.soldAt}</td>
+                          <td className="py-3 pr-4">
+                            <div className="font-medium">{sale.orderNumber || "手動成交"}</div>
+                            {sale.orderStatus && <p className="text-xs text-slate-500">{sale.orderStatus}</p>}
+                          </td>
+                          <td className="py-3 pr-4 font-medium">{sale.productName}<p className="text-xs text-slate-500">{sale.productSeries}</p></td>
+                          <td className="py-3 pr-4">{sale.quantity} {sale.saleUnit}</td>
+                          <td className="py-3 pr-4">{sale.cardsPerUnit} 張/{sale.saleUnit}</td>
+                          <td className="py-3 pr-4">{currency.format(sale.unitPrice)}</td>
+                          <td className="py-3 pr-4 font-semibold">{currency.format(sale.total)}</td>
+                          <td className="py-3 pr-4">{sale.staffName}</td>
+                          <td className="py-3 pr-4">
+                            <span className={`rounded px-2 py-1 text-xs font-medium ${sale.orderId ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-700"}`}>
+                              {sale.orderId ? "訂單成交" : "舊資料"}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="grid gap-3 lg:hidden">
                   {visibleSales.map((sale) => (
-                    <tr key={sale.id}>
-                      <td className="py-3 pr-4">{sale.soldAt}</td>
-                      <td className="py-3 pr-4">
-                        <div className="font-medium">{sale.orderNumber || "手動成交"}</div>
-                        {sale.orderStatus && <p className="text-xs text-slate-500">{sale.orderStatus}</p>}
-                      </td>
-                      <td className="py-3 pr-4 font-medium">{sale.productName}<p className="text-xs text-slate-500">{sale.productSeries}</p></td>
-                      <td className="py-3 pr-4">{sale.quantity} {sale.saleUnit}</td>
-                      <td className="py-3 pr-4">{sale.cardsPerUnit} 張/{sale.saleUnit}</td>
-                      <td className="py-3 pr-4">{currency.format(sale.unitPrice)}</td>
-                      <td className="py-3 pr-4 font-semibold">{currency.format(sale.total)}</td>
-                      <td className="py-3 pr-4">{sale.staffName}</td>
-                      <td className="py-3 pr-4">
-                        <span className={`rounded px-2 py-1 text-xs font-medium ${sale.orderId ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-700"}`}>
-                          {sale.orderId ? "訂單成交" : "舊資料"}
-                        </span>
-                      </td>
-                    </tr>
+                    <article key={sale.id} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="font-semibold">{sale.productName}</p>
+                          <p className="mt-1 text-sm text-slate-500">{sale.productSeries} · {sale.soldAt}</p>
+                          <p className="mt-1 text-sm text-slate-500">{sale.orderNumber || "手動成交"}</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="font-semibold">{currency.format(sale.total)}</p>
+                          <span className={`mt-1 inline-flex rounded px-2 py-1 text-xs font-medium ${sale.orderId ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-700"}`}>
+                            {sale.orderId ? "訂單成交" : "舊資料"}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="mt-3 grid grid-cols-2 gap-2 text-sm text-slate-600">
+                        <p>{sale.quantity} {sale.saleUnit}</p>
+                        <p>{currency.format(sale.unitPrice)}</p>
+                        <p>{sale.staffName}</p>
+                        <p>{sale.orderStatus || "-"}</p>
+                      </div>
+                    </article>
                   ))}
-                </tbody>
-              </table>
+                </div>
+                <PaginationFooter
+                  page={currentSalePage}
+                  pageCount={salePageCount}
+                  onPageChange={setSalePage}
+                  summary={`每頁 ${LIST_PAGE_SIZE} 筆，目前顯示 ${number.format(visibleSales.length)} 筆，第 ${number.format(currentSalePage)} / ${number.format(salePageCount)} 頁`}
+                />
+              </div>
             </div>
-            <div className="grid gap-3 lg:hidden">
-              {visibleSales.map((sale) => (
-                <article key={sale.id} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="font-semibold">{sale.productName}</p>
-                      <p className="mt-1 text-sm text-slate-500">{sale.productSeries} · {sale.soldAt}</p>
-                      <p className="mt-1 text-sm text-slate-500">{sale.orderNumber || "手動成交"}</p>
-                    </div>
-                    <div className="text-right">
-                      <p className="font-semibold">{currency.format(sale.total)}</p>
-                      <span className={`mt-1 inline-flex rounded px-2 py-1 text-xs font-medium ${sale.orderId ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-700"}`}>
-                        {sale.orderId ? "訂單成交" : "舊資料"}
-                      </span>
-                    </div>
-                  </div>
-                  <div className="mt-3 grid grid-cols-2 gap-2 text-sm text-slate-600">
-                    <p>{sale.quantity} {sale.saleUnit}</p>
-                    <p>{currency.format(sale.unitPrice)}</p>
-                    <p>{sale.staffName}</p>
-                    <p>{sale.orderStatus || "-"}</p>
-                  </div>
-                </article>
-              ))}
-            </div>
-            <PaginationFooter
-              page={currentSalePage}
-              pageCount={salePageCount}
-              onPageChange={setSalePage}
-              summary={`每頁 ${LIST_PAGE_SIZE} 筆，目前顯示 ${number.format(visibleSales.length)} 筆，第 ${number.format(currentSalePage)} / ${number.format(salePageCount)} 頁`}
-            />
           </section>
 
           {isAdmin && (
