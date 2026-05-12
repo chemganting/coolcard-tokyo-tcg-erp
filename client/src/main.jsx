@@ -63,9 +63,10 @@ const LIST_PAGE_SIZE = 10;
 const INVENTORY_LOG_TYPE_OPTIONS = [
   { value: "全部", label: "全部異動類型" },
   { value: "purchase", label: "進貨" },
-  { value: "sale", label: "銷售" },
-  { value: "cancel_sale", label: "取消訂單" },
-  { value: "completed_order", label: "完成訂單" },
+  { value: "sale_created", label: "成交建立" },
+  { value: "order_created", label: "建立訂單" },
+  { value: "order_completed", label: "完成訂單" },
+  { value: "order_cancelled", label: "取消訂單" },
   { value: "import", label: "匯入" },
   { value: "restore", label: "還原" },
   { value: "manual_adjustment", label: "手動調整" },
@@ -312,6 +313,9 @@ function normalizeInventoryLogType(type) {
   if (type === "purchase_update") return "manual_adjustment";
   if (type === "sale_void") return "void_sale";
   if (type === "purchase_void") return "void_purchase";
+  if (type === "sale") return "sale_created";
+  if (type === "cancel_sale") return "order_cancelled";
+  if (type === "completed_order") return "order_completed";
   return type ?? "";
 }
 
@@ -322,9 +326,10 @@ function inventoryLogTypeLabel(type) {
 
 function inventoryLogTypeTone(type) {
   const normalizedType = normalizeInventoryLogType(type);
-  if (normalizedType === "void_sale" || normalizedType === "void_purchase" || normalizedType === "cancel_sale") return "bg-slate-100 text-slate-700";
-  if (normalizedType === "sale") return "bg-rose-50 text-rose-700";
-  if (normalizedType === "completed_order") return "bg-emerald-50 text-emerald-700";
+  if (normalizedType === "void_sale" || normalizedType === "void_purchase" || normalizedType === "order_cancelled") return "bg-slate-100 text-slate-700";
+  if (normalizedType === "sale_created") return "bg-rose-50 text-rose-700";
+  if (normalizedType === "order_completed") return "bg-emerald-50 text-emerald-700";
+  if (normalizedType === "order_created") return "bg-amber-50 text-amber-700";
   if (normalizedType === "manual_adjustment") return "bg-amber-50 text-amber-700";
   return "bg-emerald-50 text-emerald-700";
 }
@@ -1300,7 +1305,7 @@ function App() {
   };
 
   const open711Delivery = () => {
-    window.open("https://myship2.7-11.com.tw/", "_blank", "noopener,noreferrer");
+    window.open("https://myship.7-11.com.tw/Home/Main", "_blank", "noopener,noreferrer");
   };
 
   const submitPurchase = async (event) => {
@@ -3052,127 +3057,95 @@ function App() {
             </div>
           </section>
 
-          <section id="銷售管理" className="grid min-w-0 gap-6 xl:grid-cols-[minmax(280px,0.75fr)_minmax(0,1.25fr)]">
-            <form onSubmit={submitSale} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="mb-4 flex items-center gap-2">
-                <ShoppingCart className="h-5 w-5 text-slate-700" />
-                <h2 className="text-lg font-semibold">新增銷售紀錄</h2>
-              </div>
-              <div className="grid gap-3">
-                <SelectInput value={saleForm.productId} onChange={(e) => {
-                  const product = products.find((item) => item.id === Number(e.target.value));
-                  setSaleForm({
-                    ...saleForm,
-                    productId: e.target.value,
-                    saleUnit: product?.unit ?? "單張",
-                    cardsPerUnit: product ? String(product.cardsPerUnit) : "1",
-                    unitPrice: product ? String(product.price) : ""
-                  });
-                }}>
-                  {products.map((product) => <option key={product.id} value={product.id}>{product.name}（庫存 {formatStock(product)}）</option>)}
-                </SelectInput>
-                {selectedProduct && <p className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-600">{selectedProduct.series} · {selectedProduct.rarity} · {selectedProduct.condition} · {selectedProduct.packageSpec}</p>}
-                <div className="grid grid-cols-2 gap-3">
-                  <TextInput required min="1" type="number" placeholder="銷售數量" value={saleForm.quantity} onChange={(e) => setSaleForm({ ...saleForm, quantity: e.target.value })} />
-                  <SelectInput value={saleForm.saleUnit} onChange={(e) => setSaleForm({ ...saleForm, saleUnit: e.target.value })}>
-                    {UNIT_OPTIONS.map((unit) => <option key={unit}>{unit}</option>)}
-                  </SelectInput>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <TextInput required min="1" type="number" placeholder="每單位張數" value={saleForm.cardsPerUnit} onChange={(e) => setSaleForm({ ...saleForm, cardsPerUnit: e.target.value })} />
-                  <TextInput required min="0" type="number" placeholder="單價" value={saleForm.unitPrice} onChange={(e) => setSaleForm({ ...saleForm, unitPrice: e.target.value })} />
-                </div>
-                <TextInput required type="date" value={saleForm.soldAt} onChange={(e) => setSaleForm({ ...saleForm, soldAt: e.target.value })} />
-                <p className="text-sm text-slate-500">總金額：{currency.format(Number(saleForm.quantity || 0) * Number(saleForm.unitPrice || 0))}，銷售 {number.format(Number(saleForm.quantity || 0))} {saleForm.saleUnit}</p>
-                <Button type="submit" className="w-full">
-                  <ShoppingCart className="h-4 w-4" />
-                  新增銷售並扣庫存
-                </Button>
-              </div>
-            </form>
-
-            <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex items-center gap-2">
-                  <CalendarDays className="h-5 w-5 text-slate-700" />
-                  <h2 className="text-lg font-semibold">銷售紀錄查詢</h2>
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <TextInput type="date" value={dateRange.from} onChange={(e) => setDateRange({ ...dateRange, from: e.target.value })} />
-                  <TextInput type="date" value={dateRange.to} onChange={(e) => setDateRange({ ...dateRange, to: e.target.value })} />
+          <section id="銷售管理" className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-center gap-2">
+                <CalendarDays className="h-5 w-5 text-slate-700" />
+                <div>
+                  <h2 className="text-lg font-semibold">銷售紀錄</h2>
+                  <p className="mt-1 text-sm text-slate-500">成交歷史由訂單完成自動產生，這裡僅供查詢。</p>
                 </div>
               </div>
-              <div className="hidden overflow-x-auto lg:block">
-                <table className="min-w-full table-auto text-left text-sm">
-                  <thead className="border-b border-slate-200 text-xs text-slate-500">
-                    <tr>
-                      <th className="py-3 pr-4">日期</th>
-                      <th className="py-3 pr-4">商品</th>
-                      <th className="py-3 pr-4">數量/單位</th>
-                      <th className="py-3 pr-4">規格</th>
-                      <th className="py-3 pr-4">單價</th>
-                      <th className="py-3 pr-4">總金額</th>
-                      <th className="py-3 pr-4">店員</th>
-                      <th className="py-3 pr-4">狀態</th>
-                      <th className="py-3">操作</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {visibleSales.map((sale) => (
-                      <tr key={sale.id}>
-                        <td className="py-3 pr-4">{sale.soldAt}</td>
-                        <td className="py-3 pr-4 font-medium">{sale.productName}<p className="text-xs text-slate-500">{sale.productSeries}</p></td>
-                        <td className="py-3 pr-4">{sale.quantity} {sale.saleUnit}</td>
-                        <td className="py-3 pr-4">{sale.cardsPerUnit} 張/{sale.saleUnit}</td>
-                        <td className="py-3 pr-4">{currency.format(sale.unitPrice)}</td>
-                        <td className={`py-3 pr-4 font-semibold ${sale.voidedAt ? "text-slate-400 line-through" : ""}`}>{currency.format(sale.total)}</td>
-                        <td className="py-3 pr-4">{sale.staffName}</td>
-                        <td className="py-3 pr-4">
-                          <span className={`rounded px-2 py-1 text-xs font-medium ${sale.voidedAt ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-700"}`}>
-                            {sale.voidedAt ? "已作廢" : "有效"}
-                          </span>
-                        </td>
-                        <td className="py-3">
-                          <Button variant="danger" disabled={!isAdmin || sale.voidedAt} onClick={() => voidSale(sale)}>
-                            <X className="h-4 w-4" />
-                            {sale.voidedAt ? "已作廢" : "作廢"}
-                          </Button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="grid grid-cols-2 gap-2">
+                <TextInput type="date" value={dateRange.from} onChange={(e) => setDateRange({ ...dateRange, from: e.target.value })} />
+                <TextInput type="date" value={dateRange.to} onChange={(e) => setDateRange({ ...dateRange, to: e.target.value })} />
               </div>
-              <div className="grid gap-3 lg:hidden">
-                    {visibleSales.map((sale) => (
-                  <article key={sale.id} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="font-semibold">{sale.productName}</p>
-                        <p className="text-sm text-slate-500">{sale.productSeries} · {sale.soldAt}</p>
-                      </div>
-                      <div className="text-right">
-                        <p className={`font-semibold ${sale.voidedAt ? "text-slate-400 line-through" : ""}`}>{currency.format(sale.total)}</p>
-                        {sale.voidedAt && <p className="mt-1 text-xs text-rose-600">已作廢</p>}
-                      </div>
-                    </div>
-                    <div className="mt-3 flex items-center justify-between">
-                      <p className="text-sm text-slate-600">{sale.quantity} {sale.saleUnit} · {currency.format(sale.unitPrice)}</p>
-                      <Button variant="danger" disabled={!isAdmin || sale.voidedAt} onClick={() => voidSale(sale)}>
-                        <X className="h-4 w-4" />
-                        {sale.voidedAt ? "已作廢" : "作廢"}
-                      </Button>
-                    </div>
-                  </article>
-                ))}
-              </div>
-              <PaginationFooter
-                page={currentSalePage}
-                pageCount={salePageCount}
-                onPageChange={setSalePage}
-                summary={`每頁 ${LIST_PAGE_SIZE} 筆，目前顯示 ${number.format(visibleSales.length)} 筆，第 ${number.format(currentSalePage)} / ${number.format(salePageCount)} 頁`}
-              />
             </div>
+            <div className="grid gap-2 rounded-lg bg-slate-50 px-4 py-3 text-sm text-slate-600 sm:grid-cols-3">
+              <div>總筆數：<span className="font-semibold text-slate-950">{number.format(filteredSales.length)}</span></div>
+              <div>已完成訂單成交：<span className="font-semibold text-slate-950">{number.format(filteredSales.filter((sale) => sale.orderId).length)}</span></div>
+              <div>手動成交舊資料：<span className="font-semibold text-slate-950">{number.format(filteredSales.filter((sale) => !sale.orderId).length)}</span></div>
+            </div>
+            <div className="hidden overflow-x-auto lg:block">
+              <table className="min-w-full table-auto text-left text-sm">
+                <thead className="border-b border-slate-200 text-xs text-slate-500">
+                  <tr>
+                    <th className="py-3 pr-4">日期</th>
+                    <th className="py-3 pr-4">來源訂單</th>
+                    <th className="py-3 pr-4">商品</th>
+                    <th className="py-3 pr-4">數量/單位</th>
+                    <th className="py-3 pr-4">規格</th>
+                    <th className="py-3 pr-4">單價</th>
+                    <th className="py-3 pr-4">總金額</th>
+                    <th className="py-3 pr-4">店員</th>
+                    <th className="py-3 pr-4">狀態</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {visibleSales.map((sale) => (
+                    <tr key={sale.id}>
+                      <td className="py-3 pr-4">{sale.soldAt}</td>
+                      <td className="py-3 pr-4">
+                        <div className="font-medium">{sale.orderNumber || "手動成交"}</div>
+                        {sale.orderStatus && <p className="text-xs text-slate-500">{sale.orderStatus}</p>}
+                      </td>
+                      <td className="py-3 pr-4 font-medium">{sale.productName}<p className="text-xs text-slate-500">{sale.productSeries}</p></td>
+                      <td className="py-3 pr-4">{sale.quantity} {sale.saleUnit}</td>
+                      <td className="py-3 pr-4">{sale.cardsPerUnit} 張/{sale.saleUnit}</td>
+                      <td className="py-3 pr-4">{currency.format(sale.unitPrice)}</td>
+                      <td className="py-3 pr-4 font-semibold">{currency.format(sale.total)}</td>
+                      <td className="py-3 pr-4">{sale.staffName}</td>
+                      <td className="py-3 pr-4">
+                        <span className={`rounded px-2 py-1 text-xs font-medium ${sale.orderId ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-700"}`}>
+                          {sale.orderId ? "訂單成交" : "舊資料"}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="grid gap-3 lg:hidden">
+              {visibleSales.map((sale) => (
+                <article key={sale.id} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="font-semibold">{sale.productName}</p>
+                      <p className="mt-1 text-sm text-slate-500">{sale.productSeries} · {sale.soldAt}</p>
+                      <p className="mt-1 text-sm text-slate-500">{sale.orderNumber || "手動成交"}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="font-semibold">{currency.format(sale.total)}</p>
+                      <span className={`mt-1 inline-flex rounded px-2 py-1 text-xs font-medium ${sale.orderId ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-700"}`}>
+                        {sale.orderId ? "訂單成交" : "舊資料"}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-sm text-slate-600">
+                    <p>{sale.quantity} {sale.saleUnit}</p>
+                    <p>{currency.format(sale.unitPrice)}</p>
+                    <p>{sale.staffName}</p>
+                    <p>{sale.orderStatus || "-"}</p>
+                  </div>
+                </article>
+              ))}
+            </div>
+            <PaginationFooter
+              page={currentSalePage}
+              pageCount={salePageCount}
+              onPageChange={setSalePage}
+              summary={`每頁 ${LIST_PAGE_SIZE} 筆，目前顯示 ${number.format(visibleSales.length)} 筆，第 ${number.format(currentSalePage)} / ${number.format(salePageCount)} 頁`}
+            />
           </section>
 
           {isAdmin && (

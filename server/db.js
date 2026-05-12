@@ -143,6 +143,7 @@ export async function initDb() {
         id SERIAL PRIMARY KEY,
         product_id INTEGER NOT NULL REFERENCES products(id),
         user_id INTEGER NOT NULL REFERENCES users(id),
+        order_id INTEGER,
         quantity INTEGER NOT NULL,
         sale_unit TEXT NOT NULL DEFAULT '單張',
         cards_per_unit INTEGER NOT NULL DEFAULT 1,
@@ -245,8 +246,11 @@ export async function initDb() {
     await client.query("ALTER TABLE products ADD CONSTRAINT products_grading_company_check CHECK (grading_company IS NULL OR grading_company IN ('PSA', 'BGS', 'CGC'))");
     await client.query("ALTER TABLE sales ADD COLUMN IF NOT EXISTS sale_unit TEXT NOT NULL DEFAULT '單張'");
     await client.query("ALTER TABLE sales ADD COLUMN IF NOT EXISTS cards_per_unit INTEGER NOT NULL DEFAULT 1");
+    await client.query("ALTER TABLE sales ADD COLUMN IF NOT EXISTS order_id INTEGER");
     await client.query("ALTER TABLE sales ADD COLUMN IF NOT EXISTS voided_at TIMESTAMPTZ");
     await client.query("ALTER TABLE sales ADD COLUMN IF NOT EXISTS voided_by INTEGER REFERENCES users(id) ON DELETE SET NULL");
+    await client.query("ALTER TABLE sales DROP CONSTRAINT IF EXISTS sales_order_id_fkey");
+    await client.query("ALTER TABLE sales ADD CONSTRAINT sales_order_id_fkey FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE SET NULL");
     await client.query("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS undone_at TIMESTAMPTZ");
     await client.query("ALTER TABLE audit_logs DROP CONSTRAINT IF EXISTS audit_logs_entity_type_check");
     await client.query("ALTER TABLE audit_logs ADD CONSTRAINT audit_logs_entity_type_check CHECK (entity_type IN ('product', 'sale', 'user', 'inventory', 'purchase', 'order'))");
@@ -285,6 +289,7 @@ export async function initDb() {
     await client.query("UPDATE orders SET line_name = '' WHERE line_name IS NULL");
     await client.query("UPDATE orders SET status = '待出貨' WHERE status IS NULL OR status = '' OR status IN ('待付款', '已付款', '待處理')");
     await client.query("UPDATE orders SET status = '已完成' WHERE status = '已出貨'");
+    await client.query("UPDATE sales SET order_id = NULL WHERE order_id IS NULL");
 
     await migrateLegacyPassword(client);
 
