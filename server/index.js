@@ -17,12 +17,13 @@ const allowedUnits = new Set(["單張", "包", "盒", "箱", "組", "其他"]);
 const productTypes = new Set(["normal", "graded"]);
 const gradingCompanies = new Set(["PSA", "BGS", "CGC"]);
 const paymentStatuses = new Set(["未付款", "已付款", "部分付款"]);
+const orderStatuses = new Set(["待付款", "已付款", "待出貨", "已出貨", "已完成", "已取消"]);
 const reportSheetTabs = ["今日營收", "庫存總表", "熱銷排行"];
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const backupDir = process.env.BACKUP_DIR
   ? path.resolve(process.env.BACKUP_DIR)
   : path.join(__dirname, "backups");
-const backupTables = ["users", "products", "sales", "audit_logs", "inventory_logs", "purchases"];
+const backupTables = ["users", "products", "sales", "orders", "order_items", "audit_logs", "inventory_logs", "purchases"];
 
 function publicUser(row) {
   const user = toCamel(row);
@@ -146,6 +147,44 @@ function validatePurchase(purchase) {
     Number.isFinite(purchase.unitCost) &&
     purchase.unitCost >= 0
   );
+}
+
+function orderPayload(body) {
+  return {
+    customerName: String(body.customerName ?? "").trim(),
+    phone: String(body.phone ?? "").trim(),
+    shippingInfo: String(body.shippingInfo ?? "").trim(),
+    lineName: String(body.lineName ?? "").trim(),
+    status: orderStatuses.has(String(body.status ?? "").trim()) ? String(body.status).trim() : "待付款",
+    items: Array.isArray(body.items)
+      ? body.items.map((item) => ({
+          productId: Number(item.productId),
+          quantity: Number(item.quantity)
+        }))
+      : []
+  };
+}
+
+function validateOrder(order) {
+  return Boolean(
+    order.customerName &&
+    Array.isArray(order.items) &&
+    order.items.length > 0 &&
+    order.items.every((item) => Number.isFinite(item.productId) && item.productId > 0 && Number.isFinite(item.quantity) && item.quantity > 0) &&
+    orderStatuses.has(order.status)
+  );
+}
+
+function orderStatusLabel(status) {
+  return status;
+}
+
+function orderStatusTone(status) {
+  if (status === "已取消") return "bg-slate-100 text-slate-700";
+  if (status === "已完成" || status === "已出貨") return "bg-emerald-50 text-emerald-700";
+  if (status === "待出貨") return "bg-amber-50 text-amber-700";
+  if (status === "已付款") return "bg-teal-50 text-teal-700";
+  return "bg-rose-50 text-rose-700";
 }
 
 function grossMargin(revenue, cost) {
@@ -468,7 +507,7 @@ async function getDashboardSnapshot() {
 
 async function createDatabaseBackup(type = "manual") {
   const normalizedType = type === "auto" ? "auto" : "manual";
-  const [schemaRows, users, products, sales, auditLogs, inventoryLogs, purchases, inventory, dashboard, profitReport] = await Promise.all([
+  const [schemaRows, users, products, sales, orders, orderItems, auditLogs, inventoryLogs, purchases, inventory, dashboard, profitReport] = await Promise.all([
     query(`
       SELECT table_name, column_name, data_type, is_nullable, column_default
       FROM information_schema.columns
@@ -484,6 +523,16 @@ async function createDatabaseBackup(type = "manual") {
     query(`
       SELECT id, product_id, user_id, quantity, sale_unit, cards_per_unit, unit_price::text, total::text, sold_at, voided_at, voided_by, created_at
       FROM sales
+      ORDER BY id
+    `),
+    query(`
+      SELECT id, customer_name, phone, shipping_info, line_name, status, total_amount::text AS total_amount, created_by, created_at, updated_at
+      FROM orders
+      ORDER BY id
+    `),
+    query(`
+      SELECT id, order_id, product_id, product_name, product_series, quantity, unit_price::text, subtotal::text, created_at
+      FROM order_items
       ORDER BY id
     `),
     query(`
@@ -530,6 +579,8 @@ async function createDatabaseBackup(type = "manual") {
       users: users.rows,
       products: products.rows,
       sales: sales.rows,
+      orders: orders.rows,
+      order_items: orderItems.rows,
       audit_logs: auditLogs.rows,
       inventory_logs: inventoryLogs.rows,
       purchases: purchases.rows
@@ -601,7 +652,7 @@ async function restoreDatabaseBackup(filename) {
 
   try {
     await client.query("BEGIN");
-    await client.query("TRUNCATE TABLE inventory_logs, audit_logs, purchases, sales, products, users RESTART IDENTITY CASCADE");
+    await client.query("TRUNCATE TABLE order_items, orders, inventory_logs, audit_logs, purchases, sales, products, users RESTART IDENTITY CASCADE");
 
     for (const user of data.users ?? []) {
       await client.query(
@@ -666,6 +717,47 @@ async function restoreDatabaseBackup(filename) {
           sale.voided_at,
           sale.voided_by,
           sale.created_at
+        ]
+      );
+    }
+
+    for (const order of data.orders ?? []) {
+      await client.query(
+        `
+          INSERT INTO orders (id, customer_name, phone, shipping_info, line_name, status, total_amount, created_by, created_at, updated_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7::numeric, (SELECT id FROM users WHERE id = $8), COALESCE($9::timestamptz, NOW()), COALESCE($10::timestamptz, NOW()))
+        `,
+        [
+          order.id,
+          order.customer_name ?? order.customerName ?? "",
+          order.phone ?? "",
+          order.shipping_info ?? order.shippingInfo ?? "",
+          order.line_name ?? order.lineName ?? "",
+          order.status ?? "待付款",
+          order.total_amount ?? order.totalAmount ?? 0,
+          order.created_by,
+          order.created_at,
+          order.updated_at
+        ]
+      );
+    }
+
+    for (const item of data.order_items ?? data.orderItems ?? []) {
+      await client.query(
+        `
+          INSERT INTO order_items (id, order_id, product_id, product_name, product_series, quantity, unit_price, subtotal, created_at)
+          VALUES ($1, (SELECT id FROM orders WHERE id = $2), (SELECT id FROM products WHERE id = $3), $4, $5, $6, $7::numeric, $8::numeric, COALESCE($9::timestamptz, NOW()))
+        `,
+        [
+          item.id,
+          item.order_id ?? item.orderId,
+          item.product_id ?? item.productId,
+          item.product_name ?? item.productName ?? "",
+          item.product_series ?? item.productSeries ?? "",
+          item.quantity,
+          item.unit_price ?? item.unitPrice ?? 0,
+          item.subtotal ?? 0,
+          item.created_at
         ]
       );
     }
@@ -893,6 +985,60 @@ async function purchaseById(client, id) {
   return rows[0] ?? null;
 }
 
+async function orderById(client, id) {
+  const { rows } = await client.query(
+    `
+      SELECT
+        orders.id,
+        orders.customer_name,
+        orders.phone,
+        orders.shipping_info,
+        orders.line_name,
+        orders.status,
+        orders.total_amount::float AS total_amount,
+        orders.created_by,
+        orders.created_at,
+        orders.updated_at,
+        users.name AS created_by_name,
+        COALESCE(
+          json_agg(
+            json_build_object(
+              'id', order_items.id,
+              'productId', order_items.product_id,
+              'productName', order_items.product_name,
+              'productSeries', order_items.product_series,
+              'quantity', order_items.quantity,
+              'unitPrice', order_items.unit_price::float,
+              'subtotal', order_items.subtotal::float
+            )
+            ORDER BY order_items.id
+          ) FILTER (WHERE order_items.id IS NOT NULL),
+          '[]'::json
+        ) AS items
+      FROM orders
+      LEFT JOIN users ON users.id = orders.created_by
+      LEFT JOIN order_items ON order_items.order_id = orders.id
+      WHERE orders.id = $1
+      GROUP BY orders.id, users.name
+    `,
+    [id]
+  );
+  return rows[0] ?? null;
+}
+
+async function orderItemsByOrderId(client, orderId) {
+  const { rows } = await client.query(
+    `
+      SELECT id, order_id, product_id, product_name, product_series, quantity, unit_price::text, subtotal::text, created_at
+      FROM order_items
+      WHERE order_id = $1
+      ORDER BY id
+    `,
+    [orderId]
+  );
+  return rows;
+}
+
 async function recalculateAverageCost(client, productId) {
   const { rows } = await client.query(
     `
@@ -1010,6 +1156,56 @@ async function restoreSaleSnapshot(client, sale) {
     `,
     [sale.id, sale.product_id, sale.user_id, sale.quantity, sale.sale_unit ?? "單張", sale.cards_per_unit ?? 1, sale.unit_price, sale.total, sale.sold_at, sale.voided_at, sale.voided_by, sale.created_at]
   );
+}
+
+async function restoreOrderSnapshot(client, order) {
+  await client.query(
+    `
+      INSERT INTO orders (id, customer_name, phone, shipping_info, line_name, status, total_amount, created_by, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7::numeric, $8, COALESCE($9::timestamptz, NOW()), COALESCE($10::timestamptz, NOW()))
+      ON CONFLICT (id) DO UPDATE SET
+        customer_name = EXCLUDED.customer_name,
+        phone = EXCLUDED.phone,
+        shipping_info = EXCLUDED.shipping_info,
+        line_name = EXCLUDED.line_name,
+        status = EXCLUDED.status,
+        total_amount = EXCLUDED.total_amount,
+        created_by = EXCLUDED.created_by,
+        updated_at = NOW()
+    `,
+    [
+      order.id,
+      order.customer_name ?? order.customerName ?? "",
+      order.phone ?? "",
+      order.shipping_info ?? order.shippingInfo ?? "",
+      order.line_name ?? order.lineName ?? "",
+      order.status ?? "待付款",
+      order.total_amount ?? order.totalAmount ?? 0,
+      order.created_by ?? order.createdBy ?? null,
+      order.created_at,
+      order.updated_at
+    ]
+  );
+
+  await client.query("DELETE FROM order_items WHERE order_id = $1", [order.id]);
+  for (const item of order.items ?? []) {
+    await client.query(
+      `
+        INSERT INTO order_items (order_id, product_id, product_name, product_series, quantity, unit_price, subtotal, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6::numeric, $7::numeric, COALESCE($8::timestamptz, NOW()))
+      `,
+      [
+        order.id,
+        item.product_id ?? item.productId ?? null,
+        item.product_name ?? item.productName ?? "",
+        item.product_series ?? item.productSeries ?? "",
+        item.quantity,
+        item.unit_price ?? item.unitPrice ?? 0,
+        item.subtotal ?? 0,
+        item.created_at
+      ]
+    );
+  }
 }
 
 async function syncSequence(client, tableName) {
@@ -2111,6 +2307,347 @@ async function voidSale(request, response, next) {
 app.post("/api/sales/:id/void", currentUser, requireAdmin, voidSale);
 app.delete("/api/sales/:id", currentUser, requireAdmin, voidSale);
 
+app.get("/api/orders", currentUser, async (request, response, next) => {
+  const params = [];
+  const filters = [];
+  const search = String(request.query.search ?? "").trim();
+  const status = String(request.query.status ?? "").trim();
+  const from = String(request.query.from ?? "").trim();
+  const to = String(request.query.to ?? "").trim();
+
+  if (search) {
+    params.push(`%${search}%`);
+    filters.push(`(orders.customer_name ILIKE $${params.length} OR orders.phone ILIKE $${params.length} OR orders.line_name ILIKE $${params.length})`);
+  }
+  if (status && orderStatuses.has(status)) {
+    params.push(status);
+    filters.push(`orders.status = $${params.length}`);
+  }
+  if (from) {
+    params.push(from);
+    filters.push(`orders.created_at::date >= $${params.length}::date`);
+  }
+  if (to) {
+    params.push(to);
+    filters.push(`orders.created_at::date <= $${params.length}::date`);
+  }
+
+  try {
+    const { rows } = await query(
+      `
+        SELECT
+          orders.id,
+          ('ORD-' || LPAD(orders.id::text, 6, '0')) AS order_number,
+          orders.customer_name,
+          orders.phone,
+          orders.shipping_info,
+          orders.line_name,
+          orders.status,
+          orders.total_amount::float AS total_amount,
+          orders.created_by,
+          orders.created_at,
+          orders.updated_at,
+          users.name AS created_by_name,
+          COALESCE(
+            json_agg(
+              json_build_object(
+                'id', order_items.id,
+                'productId', order_items.product_id,
+                'productName', order_items.product_name,
+                'productSeries', order_items.product_series,
+                'quantity', order_items.quantity,
+                'unitPrice', order_items.unit_price::float,
+                'subtotal', order_items.subtotal::float
+              )
+              ORDER BY order_items.id
+            ) FILTER (WHERE order_items.id IS NOT NULL),
+            '[]'::json
+          ) AS items
+        FROM orders
+        LEFT JOIN users ON users.id = orders.created_by
+        LEFT JOIN order_items ON order_items.order_id = orders.id
+        ${filters.length ? `WHERE ${filters.join(" AND ")}` : ""}
+        GROUP BY orders.id, users.name
+        ORDER BY orders.created_at DESC, orders.id DESC
+      `,
+      params
+    );
+    response.json(rowsToCamel(rows));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/orders", currentUser, async (request, response, next) => {
+  const order = orderPayload(request.body);
+  if (!validateOrder(order)) {
+    return response.status(400).json({ message: "訂單資料不完整或格式錯誤" });
+  }
+
+  const groupedItems = new Map();
+  for (const item of order.items) {
+    groupedItems.set(item.productId, (groupedItems.get(item.productId) ?? 0) + item.quantity);
+  }
+  const productIds = [...groupedItems.keys()];
+  if (productIds.length === 0) {
+    return response.status(400).json({ message: "訂單至少需要一項商品" });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const productResult = await client.query(
+      `
+        SELECT id, name, series, product_type, grading_company, grade, cert_number, unit, cards_per_unit, package_spec, cost::text, average_cost::text, price::text, stock, deleted_at, deleted_by, created_at, updated_at
+        FROM products
+        WHERE id = ANY($1)
+        ORDER BY id
+        FOR UPDATE
+      `,
+      [productIds]
+    );
+    if (productResult.rows.length !== productIds.length) {
+      await client.query("ROLLBACK");
+      return response.status(404).json({ message: "商品不存在" });
+    }
+
+    const productMap = new Map(productResult.rows.map((product) => [product.id, product]));
+    for (const productId of productIds) {
+      const product = productMap.get(productId);
+      const quantity = groupedItems.get(productId);
+      if (!product) {
+        await client.query("ROLLBACK");
+        return response.status(404).json({ message: "商品不存在" });
+      }
+      if (product.deleted_at) {
+        await client.query("ROLLBACK");
+        return response.status(409).json({ message: `${product.name} 已刪除，無法建立訂單` });
+      }
+      if (product.stock < quantity) {
+        await client.query("ROLLBACK");
+        return response.status(409).json({ message: `${product.name} 庫存不足，目前剩餘 ${product.stock}` });
+      }
+    }
+
+    const totalAmount = productIds.reduce((sum, productId) => {
+      const product = productMap.get(productId);
+      return sum + Number(product.price) * groupedItems.get(productId);
+    }, 0);
+
+    const insertedOrder = await client.query(
+      `
+        INSERT INTO orders (customer_name, phone, shipping_info, line_name, status, total_amount, created_by)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING id, customer_name, phone, shipping_info, line_name, status, total_amount::float AS total_amount, created_by, created_at, updated_at
+      `,
+      [order.customerName, order.phone, order.shippingInfo, order.lineName, order.status, totalAmount, request.user.id]
+    );
+
+    const beforeProducts = productIds.map((productId) => {
+      const product = productMap.get(productId);
+      return { ...product };
+    });
+    const insertedItems = [];
+
+    for (const productId of productIds) {
+      const product = productMap.get(productId);
+      const quantity = groupedItems.get(productId);
+      const unitPrice = Number(product.price);
+      const subtotal = unitPrice * quantity;
+      const item = await client.query(
+        `
+          INSERT INTO order_items (order_id, product_id, product_name, product_series, quantity, unit_price, subtotal)
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
+          RETURNING id, order_id, product_id, product_name, product_series, quantity, unit_price::float AS unit_price, subtotal::float AS subtotal, created_at
+        `,
+        [insertedOrder.rows[0].id, productId, product.name, product.series, quantity, unitPrice, subtotal]
+      );
+      insertedItems.push(item.rows[0]);
+      await client.query("UPDATE products SET stock = stock - $1, updated_at = NOW() WHERE id = $2", [quantity, productId]);
+      const afterProduct = await productById(client, productId);
+      await writeInventoryLog(client, request, productId, "sale", -quantity, product.stock, afterProduct.stock, "order", insertedOrder.rows[0].id, "快速下單建立訂單扣庫存");
+    }
+
+    const afterProducts = await Promise.all(productIds.map((productId) => productById(client, productId)));
+    const orderRow = await orderById(client, insertedOrder.rows[0].id);
+    await writeAuditLog(
+      client,
+      request,
+      "create",
+      "order",
+      { products: beforeProducts },
+      { order: orderRow, items: insertedItems, products: afterProducts }
+    );
+
+    await client.query("COMMIT");
+    response.status(201).json({ id: insertedOrder.rows[0].id });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+async function updateOrderStatus(request, response, next) {
+  const nextStatus = String(request.body.status ?? "").trim();
+  if (!orderStatuses.has(nextStatus)) {
+    return response.status(400).json({ message: "訂單狀態不合法" });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const orderResult = await client.query(
+      "SELECT id, customer_name, phone, shipping_info, line_name, status, total_amount::float AS total_amount, created_by, created_at, updated_at FROM orders WHERE id = $1 FOR UPDATE",
+      [request.params.id]
+    );
+    const beforeOrder = orderResult.rows[0];
+    if (!beforeOrder) {
+      await client.query("ROLLBACK");
+      return response.status(404).json({ message: "訂單不存在" });
+    }
+
+    const beforeSnapshot = await orderById(client, beforeOrder.id);
+    if (beforeOrder.status === nextStatus) {
+      await client.query("ROLLBACK");
+      return response.json(rowsToCamel([beforeSnapshot])[0]);
+    }
+
+    const items = await orderItemsByOrderId(client, beforeOrder.id);
+    const itemMap = new Map();
+    for (const item of items) {
+      itemMap.set(item.product_id, (itemMap.get(item.product_id) ?? 0) + Number(item.quantity));
+    }
+
+    const restoring = beforeOrder.status === "已取消" && nextStatus !== "已取消";
+    const cancelling = beforeOrder.status !== "已取消" && nextStatus === "已取消";
+    const beforeProducts = [];
+    const afterProducts = [];
+
+    if (restoring || cancelling) {
+      const productIds = [...itemMap.keys()];
+      const productResult = await client.query(
+        `
+          SELECT id, name, series, rarity, condition, product_type, grading_company, grade, cert_number, unit, cards_per_unit, package_spec, cost::text, average_cost::text, price::text, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at
+          FROM products
+          WHERE id = ANY($1)
+          ORDER BY id
+          FOR UPDATE
+        `,
+        [productIds]
+      );
+      const productMap = new Map(productResult.rows.map((product) => [product.id, product]));
+      if (productMap.size !== productIds.length) {
+        await client.query("ROLLBACK");
+        return response.status(404).json({ message: "商品不存在" });
+      }
+
+      for (const productId of productIds) {
+        const product = productMap.get(productId);
+        const quantity = itemMap.get(productId);
+        beforeProducts.push({ ...product });
+        if (restoring && product.stock < quantity) {
+          await client.query("ROLLBACK");
+          return response.status(409).json({ message: `${product.name} 庫存不足，無法恢復訂單` });
+        }
+      }
+
+      for (const productId of productIds) {
+        const product = productMap.get(productId);
+        const quantity = itemMap.get(productId);
+        if (cancelling) {
+          await client.query("UPDATE products SET stock = stock + $1, updated_at = NOW() WHERE id = $2", [quantity, productId]);
+        } else {
+          await client.query("UPDATE products SET stock = stock - $1, updated_at = NOW() WHERE id = $2", [quantity, productId]);
+        }
+        const afterProduct = await productById(client, productId);
+        afterProducts.push(afterProduct);
+        await writeInventoryLog(
+          client,
+          request,
+          productId,
+          cancelling ? "sale_void" : "sale",
+          cancelling ? quantity : -quantity,
+          product.stock,
+          afterProduct.stock,
+          "order",
+          beforeOrder.id,
+          cancelling ? "訂單取消補回庫存" : "訂單恢復扣庫存"
+        );
+      }
+    }
+
+    await client.query("UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2", [nextStatus, beforeOrder.id]);
+    const afterOrder = await orderById(client, beforeOrder.id);
+    await writeAuditLog(
+      client,
+      request,
+      "update",
+      "order",
+      { order: beforeSnapshot, products: beforeProducts.length ? beforeProducts : undefined },
+      { order: afterOrder, products: afterProducts.length ? afterProducts : undefined }
+    );
+    await client.query("COMMIT");
+    response.json(rowsToCamel([afterOrder])[0]);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    next(error);
+  } finally {
+    client.release();
+  }
+}
+
+app.get("/api/orders/:id", currentUser, async (request, response, next) => {
+  try {
+    const { rows } = await query(
+      `
+        SELECT
+          orders.id,
+          ('ORD-' || LPAD(orders.id::text, 6, '0')) AS order_number,
+          orders.customer_name,
+          orders.phone,
+          orders.shipping_info,
+          orders.line_name,
+          orders.status,
+          orders.total_amount::float AS total_amount,
+          orders.created_by,
+          orders.created_at,
+          orders.updated_at,
+          users.name AS created_by_name,
+          COALESCE(
+            json_agg(
+              json_build_object(
+                'id', order_items.id,
+                'productId', order_items.product_id,
+                'productName', order_items.product_name,
+                'productSeries', order_items.product_series,
+                'quantity', order_items.quantity,
+                'unitPrice', order_items.unit_price::float,
+                'subtotal', order_items.subtotal::float
+              )
+              ORDER BY order_items.id
+            ) FILTER (WHERE order_items.id IS NOT NULL),
+            '[]'::json
+          ) AS items
+        FROM orders
+        LEFT JOIN users ON users.id = orders.created_by
+        LEFT JOIN order_items ON order_items.order_id = orders.id
+        WHERE orders.id = $1
+        GROUP BY orders.id, users.name
+      `,
+      [request.params.id]
+    );
+    if (!rows[0]) return response.status(404).json({ message: "訂單不存在" });
+    response.json(rowsToCamel(rows)[0]);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch("/api/orders/:id/status", currentUser, updateOrderStatus);
+app.put("/api/orders/:id", currentUser, updateOrderStatus);
+
 app.get("/api/audit-logs", currentUser, async (request, response, next) => {
   try {
     const params = [];
@@ -2243,6 +2780,23 @@ app.post("/api/undo", currentUser, async (request, response, next) => {
       } else if (log.action_type === "update") {
         if (before.product) await restoreProductSnapshot(client, before.product);
         await restoreSaleSnapshot(client, before.sale ?? before);
+      }
+    } else if (log.entity_type === "order") {
+      if (log.action_type === "create") {
+        if (after.order) {
+          await restoreOrderSnapshot(client, after.order);
+          await client.query("UPDATE orders SET status = '已取消', updated_at = NOW() WHERE id = $1", [after.order.id]);
+        }
+        for (const product of before.products ?? []) {
+          await restoreProductSnapshot(client, product);
+        }
+      } else if (log.action_type === "update") {
+        if (before.order) {
+          await restoreOrderSnapshot(client, before.order);
+        }
+        for (const product of before.products ?? []) {
+          await restoreProductSnapshot(client, product);
+        }
       }
     } else if (log.entity_type === "user") {
       if (log.action_type === "create") {

@@ -187,12 +187,37 @@ export async function initDb() {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
 
+      CREATE TABLE IF NOT EXISTS orders (
+        id SERIAL PRIMARY KEY,
+        customer_name TEXT NOT NULL DEFAULT '',
+        phone TEXT NOT NULL DEFAULT '',
+        shipping_info TEXT NOT NULL DEFAULT '',
+        line_name TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT '待付款' CHECK (status IN ('待付款', '已付款', '待出貨', '已出貨', '已完成', '已取消')),
+        total_amount NUMERIC NOT NULL DEFAULT 0,
+        created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS order_items (
+        id SERIAL PRIMARY KEY,
+        order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+        product_id INTEGER REFERENCES products(id) ON DELETE SET NULL,
+        product_name TEXT NOT NULL,
+        product_series TEXT NOT NULL DEFAULT '',
+        quantity INTEGER NOT NULL,
+        unit_price NUMERIC NOT NULL,
+        subtotal NUMERIC NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
       CREATE TABLE IF NOT EXISTS audit_logs (
         id SERIAL PRIMARY KEY,
         user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
         username TEXT NOT NULL,
         action_type TEXT NOT NULL CHECK (action_type IN ('create', 'update', 'delete', 'restore')),
-        entity_type TEXT NOT NULL CHECK (entity_type IN ('product', 'sale', 'user', 'inventory', 'purchase')),
+        entity_type TEXT NOT NULL CHECK (entity_type IN ('product', 'sale', 'user', 'inventory', 'purchase', 'order')),
         before_data JSONB,
         after_data JSONB,
         undone_at TIMESTAMPTZ,
@@ -224,7 +249,26 @@ export async function initDb() {
     await client.query("ALTER TABLE sales ADD COLUMN IF NOT EXISTS voided_by INTEGER REFERENCES users(id) ON DELETE SET NULL");
     await client.query("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS undone_at TIMESTAMPTZ");
     await client.query("ALTER TABLE audit_logs DROP CONSTRAINT IF EXISTS audit_logs_entity_type_check");
-    await client.query("ALTER TABLE audit_logs ADD CONSTRAINT audit_logs_entity_type_check CHECK (entity_type IN ('product', 'sale', 'user', 'inventory', 'purchase'))");
+    await client.query("ALTER TABLE audit_logs ADD CONSTRAINT audit_logs_entity_type_check CHECK (entity_type IN ('product', 'sale', 'user', 'inventory', 'purchase', 'order'))");
+    await client.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_name TEXT NOT NULL DEFAULT ''");
+    await client.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS phone TEXT NOT NULL DEFAULT ''");
+    await client.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_info TEXT NOT NULL DEFAULT ''");
+    await client.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS line_name TEXT NOT NULL DEFAULT ''");
+    await client.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT '待付款'");
+    await client.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS total_amount NUMERIC NOT NULL DEFAULT 0");
+    await client.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS created_by INTEGER REFERENCES users(id) ON DELETE SET NULL");
+    await client.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()");
+    await client.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()");
+    await client.query("ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_status_check");
+    await client.query("ALTER TABLE orders ADD CONSTRAINT orders_status_check CHECK (status IN ('待付款', '已付款', '待出貨', '已出貨', '已完成', '已取消'))");
+    await client.query("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE");
+    await client.query("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS product_id INTEGER REFERENCES products(id) ON DELETE SET NULL");
+    await client.query("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS product_name TEXT NOT NULL DEFAULT ''");
+    await client.query("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS product_series TEXT NOT NULL DEFAULT ''");
+    await client.query("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS quantity INTEGER NOT NULL DEFAULT 1");
+    await client.query("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS unit_price NUMERIC NOT NULL DEFAULT 0");
+    await client.query("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS subtotal NUMERIC NOT NULL DEFAULT 0");
+    await client.query("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()");
 
     await client.query("UPDATE products SET unit = '單張' WHERE unit IS NULL OR unit = ''");
     await client.query("UPDATE products SET cards_per_unit = 1 WHERE cards_per_unit IS NULL OR cards_per_unit <= 0");
@@ -235,6 +279,11 @@ export async function initDb() {
     await client.query("UPDATE sales SET cards_per_unit = 1 WHERE cards_per_unit IS NULL OR cards_per_unit <= 0");
     await client.query("UPDATE users SET display_name = name WHERE display_name IS NULL OR display_name = ''");
     await client.query("UPDATE users SET is_active = TRUE WHERE is_active IS NULL");
+    await client.query("UPDATE orders SET customer_name = '' WHERE customer_name IS NULL");
+    await client.query("UPDATE orders SET phone = '' WHERE phone IS NULL");
+    await client.query("UPDATE orders SET shipping_info = '' WHERE shipping_info IS NULL");
+    await client.query("UPDATE orders SET line_name = '' WHERE line_name IS NULL");
+    await client.query("UPDATE orders SET status = '待付款' WHERE status IS NULL OR status = ''");
 
     await migrateLegacyPassword(client);
 
