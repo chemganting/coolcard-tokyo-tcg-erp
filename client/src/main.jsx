@@ -16,6 +16,7 @@ import {
   PackagePlus,
   Plus,
   Search,
+  Copy,
   ShieldCheck,
   ShoppingCart,
   Trash2,
@@ -184,6 +185,77 @@ function orderStatusTone(status) {
   if (status === "已完成") return "bg-emerald-50 text-emerald-700";
   if (status === "待出貨") return "bg-amber-50 text-amber-700";
   return "bg-rose-50 text-rose-700";
+}
+
+function parseShippingAssistantData(order) {
+  const shippingInfo = String(order?.shippingInfo ?? "").trim();
+  const lines = shippingInfo
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const stripLabel = (line, labels) => {
+    const found = labels.find((label) => line.includes(label));
+    if (!found) return line.trim();
+    return line
+      .replace(found, "")
+      .replace(/^[：:\s-]+/, "")
+      .trim();
+  };
+
+  const storeNameLine = lines.find((line) => /(門市|店名)/.test(line) && !/(店號|代碼|號碼|編號)/.test(line))
+    || lines.find((line) => line && !/(店號|代碼|號碼|編號)/.test(line))
+    || "";
+  const storeNumberLine = lines.find((line) => /(店號|代碼|號碼|編號)/.test(line))
+    || lines.find((line) => /\d{3,6}/.test(line))
+    || "";
+
+  const storeName = storeNameLine
+    ? stripLabel(storeNameLine, ["門市名稱", "門市", "店名", "超商門市", "門市代號"])
+    : "";
+  const storeNumber = storeNumberLine
+    ? stripLabel(storeNumberLine, ["店號", "門市代碼", "代碼", "號碼", "編號"])
+    : "";
+
+  const noteLines = lines.filter((line) => line !== storeNameLine && line !== storeNumberLine);
+  const note = noteLines.join("\n").trim() || shippingInfo;
+
+  return {
+    recipient: String(order?.customerName ?? "").trim(),
+    phone: String(order?.phone ?? "").trim(),
+    storeName,
+    storeNumber,
+    note
+  };
+}
+
+function buildShippingAssistantText(order) {
+  const data = parseShippingAssistantData(order);
+  return [
+    `收件人：${data.recipient || "-"}`,
+    `電話：${data.phone || "-"}`,
+    `7-11門市：${data.storeName || "-"}`,
+    `7-11店號：${data.storeNumber || "-"}`,
+    `備註：${data.note || "-"}`
+  ].join("\n");
+}
+
+async function copyTextToClipboard(text) {
+  const content = String(text ?? "");
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(content);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = content;
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  document.body.removeChild(textarea);
 }
 
 function buildPageNumbers(currentPage, pageCount) {
@@ -411,6 +483,54 @@ function BottomDrawer({ open, title, onClose, children, footer }) {
   );
 }
 
+function ShippingAssistantPanel({ order, onCopyText, onOpen711 }) {
+  const data = parseShippingAssistantData(order);
+  const rows = [
+    { label: "收件人", value: data.recipient },
+    { label: "電話", value: data.phone },
+    { label: "7-11 門市名稱", value: data.storeName },
+    { label: "7-11 店號", value: data.storeNumber },
+    { label: "備註", value: data.note }
+  ];
+
+  return (
+    <div className="mt-3 rounded-xl border border-teal-200 bg-teal-50/40 p-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h4 className="text-sm font-semibold text-slate-950">寄件助手</h4>
+          <p className="mt-1 text-xs text-slate-500">快速複製寄件資訊，貼到 7-11 交貨便。</p>
+        </div>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <Button type="button" variant="secondary" className="w-full sm:w-auto" onClick={onOpen711}>
+            <ExternalLink className="h-4 w-4" />
+            開啟 7-11 交貨便
+          </Button>
+          <Button type="button" className="w-full sm:w-auto" onClick={() => onCopyText(buildShippingAssistantText(order))}>
+            <Copy className="h-4 w-4" />
+            一鍵複製全部寄件資訊
+          </Button>
+        </div>
+      </div>
+      <div className="mt-3 grid gap-2">
+        {rows.map((row) => (
+          <div key={row.label} className="rounded-lg border border-teal-100 bg-white p-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-xs font-medium text-slate-500">{row.label}</p>
+                <p className="mt-1 break-words text-sm font-medium text-slate-950">{row.value || "-"}</p>
+              </div>
+              <Button type="button" variant="secondary" className="shrink-0" onClick={() => onCopyText(row.value || "")}>
+                <Copy className="h-4 w-4" />
+                複製
+              </Button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function StatCard({ icon: Icon, label, value, detail, tone }) {
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
@@ -599,6 +719,7 @@ function App() {
   const [orderStatusFilter, setOrderStatusFilter] = useState("全部");
   const [mobileOrderTab, setMobileOrderTab] = useState("待處理");
   const [mobileDrawer, setMobileDrawer] = useState(null);
+  const [shippingAssistantOrderId, setShippingAssistantOrderId] = useState(null);
   const productFormRef = useRef(null);
   const purchaseFormRef = useRef(null);
   const [error, setError] = useState("");
@@ -1166,6 +1287,20 @@ function App() {
 
   const openMobileOrderDrawer = (order) => {
     setMobileDrawer({ type: "order", order });
+  };
+
+  const copyShippingText = async (text) => {
+    setError("");
+    try {
+      await copyTextToClipboard(text);
+      setAutoSaveStatus("寄件資訊已複製");
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const open711Delivery = () => {
+    window.open("https://myship2.7-11.com.tw/", "_blank", "noopener,noreferrer");
   };
 
   const submitPurchase = async (event) => {
@@ -2805,22 +2940,38 @@ function App() {
                             </div>
                           ))}
                         </div>
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          <Button type="button" variant="secondary" className="flex-1" onClick={() => openMobileOrderDrawer(order)}>
+                        <div className="mt-3 grid grid-cols-2 gap-2">
+                          <Button type="button" variant="secondary" className="w-full" onClick={() => openMobileOrderDrawer(order)}>
                             <ChevronDown className="h-4 w-4 rotate-[-90deg]" />
                             詳情
                           </Button>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            className="w-full"
+                            onClick={() => setShippingAssistantOrderId((current) => (current === order.id ? null : order.id))}
+                          >
+                            <Copy className="h-4 w-4" />
+                            寄件助手
+                          </Button>
                           {tab.allowActions && (
-                            <>
-                              <Button type="button" className="flex-1" onClick={() => updateOrderStatus(order.id, "已完成")}>
-                                已完成
-                              </Button>
-                              <Button type="button" variant="danger" className="flex-1" onClick={() => updateOrderStatus(order.id, "已取消")}>
-                                已取消
-                              </Button>
-                            </>
+                            <Button type="button" className="w-full" onClick={() => updateOrderStatus(order.id, "已完成")}>
+                              已完成
+                            </Button>
+                          )}
+                          {tab.allowActions && (
+                            <Button type="button" variant="danger" className="w-full" onClick={() => updateOrderStatus(order.id, "已取消")}>
+                              已取消
+                            </Button>
                           )}
                         </div>
+                        {shippingAssistantOrderId === order.id && (
+                          <ShippingAssistantPanel
+                            order={order}
+                            onCopyText={copyShippingText}
+                            onOpen711={open711Delivery}
+                          />
+                        )}
                       </article>
                     ))}
                     {tab.orders.length === 0 && <p className="py-6 text-center text-slate-500">{tab.empty}</p>}
@@ -2873,6 +3024,24 @@ function App() {
                               </Button>
                             </div>
                           )}
+                          <div className="mt-3">
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              className="w-full"
+                              onClick={() => setShippingAssistantOrderId((current) => (current === order.id ? null : order.id))}
+                            >
+                              <Copy className="h-4 w-4" />
+                              寄件助手
+                            </Button>
+                            {shippingAssistantOrderId === order.id && (
+                              <ShippingAssistantPanel
+                                order={order}
+                                onCopyText={copyShippingText}
+                                onOpen711={open711Delivery}
+                              />
+                            )}
+                          </div>
                         </article>
                       ))}
                       {column.orders.length === 0 && <p className="py-6 text-center text-slate-500">{column.empty}</p>}
