@@ -342,6 +342,75 @@ function Button({ variant = "primary", children, className = "", ...props }) {
   );
 }
 
+function BottomDrawer({ open, title, onClose, children, footer }) {
+  const dragStartRef = useRef(null);
+  const [dragOffset, setDragOffset] = useState(0);
+
+  useEffect(() => {
+    if (!open) {
+      setDragOffset(0);
+      dragStartRef.current = null;
+    }
+  }, [open]);
+
+  if (!open) return null;
+
+  const handleTouchStart = (event) => {
+    dragStartRef.current = event.touches[0].clientY;
+  };
+
+  const handleTouchMove = (event) => {
+    if (dragStartRef.current == null) return;
+    const delta = Math.max(0, event.touches[0].clientY - dragStartRef.current);
+    setDragOffset(Math.min(delta, 180));
+  };
+
+  const handleTouchEnd = () => {
+    if (dragOffset > 80) {
+      onClose();
+    } else {
+      setDragOffset(0);
+    }
+    dragStartRef.current = null;
+  };
+
+  return (
+    <div className="fixed inset-0 z-[75] lg:hidden">
+      <button type="button" className="absolute inset-0 bg-slate-950/40" aria-label="關閉抽屜" onClick={onClose} />
+      <div
+        className="absolute inset-x-0 bottom-0 max-h-[88vh] rounded-t-2xl border-t border-slate-200 bg-white shadow-2xl"
+        style={{
+          paddingBottom: "calc(env(safe-area-inset-bottom) + 1rem)",
+          transform: `translateY(${dragOffset}px)`,
+          transition: dragOffset > 0 ? "none" : "transform 220ms ease"
+        }}
+      >
+        <div
+          className="flex items-center justify-center pt-3"
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+        >
+          <div className="h-1.5 w-12 rounded-full bg-slate-300" />
+        </div>
+        <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 pb-4 pt-3">
+          <div className="min-w-0">
+            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Mobile Drawer</p>
+            <h3 className="truncate text-lg font-semibold text-slate-950">{title}</h3>
+          </div>
+          <Button type="button" variant="secondary" className="h-12 w-12 shrink-0 px-0" onClick={onClose}>
+            <X className="h-5 w-5" />
+          </Button>
+        </div>
+        <div className="max-h-[calc(88vh-8rem)] overflow-y-auto px-4 py-4">
+          {children}
+        </div>
+        {footer && <div className="border-t border-slate-200 px-4 pt-4">{footer}</div>}
+      </div>
+    </div>
+  );
+}
+
 function StatCard({ icon: Icon, label, value, detail, tone }) {
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
@@ -528,6 +597,10 @@ function App() {
   });
   const [orderCustomerSearch, setOrderCustomerSearch] = useState("");
   const [orderStatusFilter, setOrderStatusFilter] = useState("全部");
+  const [mobileOrderTab, setMobileOrderTab] = useState("待處理");
+  const [mobileDrawer, setMobileDrawer] = useState(null);
+  const productFormRef = useRef(null);
+  const purchaseFormRef = useRef(null);
   const [error, setError] = useState("");
   const [productForm, setProductForm] = useState(emptyProduct);
   const [purchaseForm, setPurchaseForm] = useState(emptyPurchase);
@@ -982,16 +1055,18 @@ function App() {
   };
 
   const addOrderItem = (product, quantity = 1) => {
+    if (!product || product.stock <= 0) return;
+    const nextQuantity = Math.max(1, Math.min(quantity, product.stock));
     setOrderItems((current) => {
       const existing = current.find((item) => item.product.id === product.id);
       if (existing) {
         return current.map((item) =>
           item.product.id === product.id
-            ? { ...item, quantity: Math.min(item.quantity + quantity, product.stock) }
+            ? { ...item, quantity: Math.min(item.quantity + nextQuantity, product.stock) }
             : item
         );
       }
-      return [...current, { product, quantity: Math.min(quantity, product.stock) }];
+      return [...current, { product, quantity: nextQuantity }];
     });
     setSelectedOrderProductId(product.id);
     setSelectedOrderQuantity(1);
@@ -1070,8 +1145,27 @@ function App() {
     }
   };
 
+  const scrollToSection = (sectionId) => {
+    document.getElementById(sectionId)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setMobileMenuOpen(false);
+  };
+
   const showAllProducts = () => {
-    document.getElementById("商品庫存")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    scrollToSection("商品庫存");
+  };
+
+  const openMobileProductDrawer = (product) => {
+    setMobileDrawer({ type: "product", product });
+  };
+
+  const openMobileOrderProductDrawer = (product) => {
+    setSelectedOrderProductId(product.id);
+    setSelectedOrderQuantity(1);
+    setMobileDrawer({ type: "order-product", product });
+  };
+
+  const openMobileOrderDrawer = (order) => {
+    setMobileDrawer({ type: "order", order });
   };
 
   const submitPurchase = async (event) => {
@@ -1395,7 +1489,7 @@ function App() {
   }
 
   return (
-    <div className="min-h-screen overflow-x-hidden bg-slate-100 pb-44 text-slate-900 lg:pb-0">
+    <div className="min-h-screen overflow-x-hidden bg-slate-100 pb-72 text-slate-900 lg:pb-0">
       {wakingBackend && <WakeNotice />}
       <aside className="fixed inset-y-0 left-0 hidden w-64 border-r border-slate-200 bg-white px-5 py-6 lg:block">
         <div className="flex items-center gap-3">
@@ -1681,7 +1775,7 @@ function App() {
 
                   <div className="max-h-[calc(100vh-16rem)] overflow-y-auto px-4 pb-4 pt-4">
                     {productCreateTab === "manual" ? (
-                      <form onSubmit={submitProduct} className="grid gap-5">
+                      <form ref={productFormRef} onSubmit={submitProduct} className="grid gap-5">
                   <section>
                     <h4 className="mb-3 text-sm font-semibold text-slate-700">基本資訊</h4>
                     <div className="grid gap-3 sm:grid-cols-2 sm:[grid-template-columns:repeat(2,minmax(0,1fr))]">
@@ -1981,7 +2075,11 @@ function App() {
                           <p className="text-xs text-slate-500">售價</p>
                           <p className="font-semibold">{currency.format(product.price)}</p>
                         </div>
-                        <div className="flex gap-2">
+                        <div className="flex flex-wrap justify-end gap-2">
+                          <Button type="button" variant="secondary" onClick={() => openMobileProductDrawer(product)}>
+                            <ChevronDown className="h-4 w-4 rotate-[-90deg]" />
+                            詳情
+                          </Button>
                           <Button type="button" variant="secondary" onClick={() => addOrderItem(product)}>
                             <Plus className="h-4 w-4" />
                             加到訂單
@@ -2192,7 +2290,7 @@ function App() {
           </section>
 
           <section id="進貨管理" className="grid min-w-0 gap-6 xl:grid-cols-[minmax(280px,0.8fr)_minmax(0,1.2fr)]">
-            <form onSubmit={submitPurchase} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <form ref={purchaseFormRef} onSubmit={submitPurchase} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
               <div className="mb-4 flex items-center gap-2">
                 <PackagePlus className="h-5 w-5 text-slate-700" />
                 <h2 className="text-lg font-semibold">{editingPurchaseId ? "編輯進貨單" : "新增進貨單"}</h2>
@@ -2345,7 +2443,133 @@ function App() {
               <h2 className="text-lg font-semibold">快速下單</h2>
             </div>
 
-            <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
+            <div className="grid gap-4 lg:hidden">
+              <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="mb-4 flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-base font-semibold">商品面板</h3>
+                    <p className="mt-1 text-sm text-slate-500">先選商品，再加入訂單。</p>
+                  </div>
+                  <p className="text-sm font-semibold text-slate-700">{number.format(orderProducts.length)} 筆</p>
+                </div>
+                <div className="relative min-w-0">
+                  <Search className="pointer-events-none absolute left-3 top-2.5 h-5 w-5 text-slate-400" />
+                  <input
+                    value={orderProductSearch}
+                    onChange={(event) => setOrderProductSearch(event.target.value)}
+                    placeholder="搜尋商品名稱、系列、Grade"
+                    className="h-12 w-full rounded-md border border-slate-300 bg-white pl-10 pr-3 text-base outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-100"
+                  />
+                </div>
+                <div className="mt-4 grid grid-cols-2 gap-3">
+                  {orderProducts.map((product) => {
+                    const isSelected = selectedOrderProductId === product.id;
+                    return (
+                      <button
+                        key={product.id}
+                        type="button"
+                        onClick={() => openMobileOrderProductDrawer(product)}
+                        className={`rounded-lg border p-3 text-left shadow-sm transition active:scale-[0.99] ${isSelected ? "border-teal-300 bg-teal-50" : "border-slate-200 bg-white hover:border-teal-300 hover:bg-teal-50"}`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="truncate font-medium text-slate-950">{product.name}</p>
+                            <p className="mt-1 text-sm text-slate-500">{product.series}</p>
+                          </div>
+                          {product.productType === "graded" && <span className="rounded bg-indigo-50 px-2 py-1 text-[11px] font-medium text-indigo-700">{productBadgeLabel(product)}</span>}
+                        </div>
+                        <div className="mt-2 flex items-center justify-between text-sm">
+                          <span className="font-semibold text-slate-950">{currency.format(product.price)}</span>
+                          <span className={`rounded px-2 py-1 text-xs font-medium ${product.stock <= product.lowStockThreshold ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-700"}`}>
+                            {formatStock(product)}
+                          </span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                  {orderProducts.length === 0 && <p className="py-6 text-center text-slate-500 col-span-2">沒有可選商品</p>}
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="mb-4 flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-base font-semibold">訂單資訊</h3>
+                    <p className="mt-1 text-sm text-slate-500">加入商品後填寫客戶資料並建立訂單。</p>
+                  </div>
+                  <p className="font-semibold">{currency.format(orderTotal)}</p>
+                </div>
+                {orderItems.length === 0 ? (
+                  <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+                    先從上方加入商品
+                  </div>
+                ) : (
+                  <div className="grid gap-4">
+                    <div className="grid gap-3">
+                      <label className="grid gap-1 text-sm font-medium text-slate-600">
+                        客戶名稱
+                        <TextInput value={orderForm.customerName} onChange={(e) => setOrderForm({ ...orderForm, customerName: e.target.value })} placeholder="客戶姓名" />
+                      </label>
+                      <label className="grid gap-1 text-sm font-medium text-slate-600">
+                        電話
+                        <TextInput value={orderForm.phone} onChange={(e) => setOrderForm({ ...orderForm, phone: e.target.value })} placeholder="聯絡電話" />
+                      </label>
+                      <label className="grid gap-1 text-sm font-medium text-slate-600">
+                        寄件資料（7-11 門市）
+                        <TextArea value={orderForm.shippingInfo} onChange={(e) => setOrderForm({ ...orderForm, shippingInfo: e.target.value })} placeholder="門市名稱 / 代碼 / 收件資訊" />
+                      </label>
+                      <label className="grid gap-1 text-sm font-medium text-slate-600">
+                        LINE 名稱
+                        <TextInput value={orderForm.lineName} onChange={(e) => setOrderForm({ ...orderForm, lineName: e.target.value })} placeholder="LINE 顯示名稱" />
+                      </label>
+                    </div>
+                    <div className="grid gap-2 border-t border-slate-200 pt-4">
+                      {orderItems.map((item) => (
+                        <div key={item.product.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="truncate font-medium">{item.product.name}</p>
+                              <p className="mt-1 text-sm text-slate-500">{currency.format(item.product.price)} · 小計 {currency.format(item.quantity * Number(item.product.price || 0))}</p>
+                            </div>
+                            <Button type="button" variant="danger" className="h-10 w-10 px-0" onClick={() => setOrderItems((current) => current.filter((currentItem) => currentItem.product.id !== item.product.id))}>
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                          <div className="mt-3 flex items-center gap-2">
+                            <Button type="button" variant="secondary" className="h-10 w-10 px-0" onClick={() => updateOrderQuantity(item.product.id, -1)}>
+                              <Minus className="h-4 w-4" />
+                            </Button>
+                            <input
+                              type="number"
+                              min="1"
+                              max={item.product.stock}
+                              value={item.quantity}
+                              onChange={(event) => {
+                                const nextQuantity = Math.max(1, Math.min(item.product.stock, Number(event.target.value) || 1));
+                                setOrderItems((current) =>
+                                  current.map((currentItem) =>
+                                    currentItem.product.id === item.product.id
+                                      ? { ...currentItem, quantity: nextQuantity }
+                                      : currentItem
+                                  )
+                                );
+                              }}
+                              className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-center text-base outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-100 sm:text-sm"
+                            />
+                            <Button type="button" variant="secondary" className="h-10 w-10 px-0" onClick={() => updateOrderQuantity(item.product.id, 1)}>
+                              <Plus className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-600">總金額：{currency.format(orderTotal)}</p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="hidden min-w-0 gap-6 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)] lg:grid">
               <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
                 <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
@@ -2514,7 +2738,7 @@ function App() {
               <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <h3 className="text-base font-semibold">訂單管理區</h3>
-                  <p className="mt-1 text-sm text-slate-500">三欄檢視：待處理、已完成、已取消。</p>
+                  <p className="mt-1 text-sm text-slate-500">桌機版三欄檢視，手機版改為 tab，待處理即待出貨。</p>
                 </div>
                 <div className="grid gap-2 sm:grid-cols-[minmax(220px,1fr)_180px]">
                   <div className="relative min-w-0">
@@ -2526,13 +2750,85 @@ function App() {
                       className="h-12 w-full rounded-md border border-slate-300 bg-white pl-10 pr-3 text-base outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-100 sm:h-10 sm:text-sm"
                     />
                   </div>
-                  <SelectInput value={orderStatusFilter} onChange={(event) => setOrderStatusFilter(event.target.value)}>
+                  <SelectInput className="hidden lg:block" value={orderStatusFilter} onChange={(event) => setOrderStatusFilter(event.target.value)}>
                     <option value="全部">全部狀態</option>
                     {ORDER_STATUS_OPTIONS.map((status) => <option key={status} value={status}>{status}</option>)}
                   </SelectInput>
                 </div>
               </div>
-              <div className="grid gap-6 xl:grid-cols-3">
+              <div className="grid gap-4 lg:hidden">
+                <div className="grid grid-cols-3 gap-2 rounded-lg bg-slate-100 p-1 text-sm font-medium">
+                  {[
+                    { key: "待處理", count: pendingOrders.length },
+                    { key: "已完成", count: doneOrders.filter((order) => order.status === "已完成").length },
+                    { key: "已取消", count: doneOrders.filter((order) => order.status === "已取消").length }
+                  ].map((tab) => (
+                    <button
+                      key={tab.key}
+                      type="button"
+                      onClick={() => setMobileOrderTab(tab.key)}
+                      className={`rounded-md px-3 py-2 transition ${mobileOrderTab === tab.key ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"}`}
+                    >
+                      {tab.key}
+                      <span className="ml-2 text-xs text-slate-500">{number.format(tab.count)}</span>
+                    </button>
+                  ))}
+                </div>
+
+                {[
+                  { key: "待處理", orders: pendingOrders, empty: "尚無待出貨訂單", allowActions: true },
+                  { key: "已完成", orders: doneOrders.filter((order) => order.status === "已完成"), empty: "尚無已完成訂單", allowActions: false },
+                  { key: "已取消", orders: doneOrders.filter((order) => order.status === "已取消"), empty: "尚無已取消訂單", allowActions: false }
+                ].filter((tab) => tab.key === mobileOrderTab).map((tab) => (
+                  <div key={tab.key} className="grid gap-3">
+                    {tab.orders.map((order) => (
+                      <article key={order.id} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="font-semibold text-slate-950">{order.orderNumber}</p>
+                            <p className="mt-1 text-sm text-slate-500">{order.customerName || "-"}</p>
+                            <p className="mt-1 text-sm text-slate-500">{order.lineName || "-"} · {order.phone || "-"}</p>
+                            <p className="mt-1 text-sm text-slate-500">{order.shippingInfo || "-"}</p>
+                          </div>
+                          <span className={`rounded px-2 py-1 text-xs font-medium ${orderStatusTone(order.status)}`}>{orderStatusLabel(order.status)}</span>
+                        </div>
+                        <div className="mt-3 grid gap-2 text-sm text-slate-600">
+                          <p>商品數量 {number.format(order.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0))}</p>
+                          <p>訂單總額 {currency.format(order.totalAmount)}</p>
+                          <p>建立時間 {new Date(order.createdAt).toLocaleString("zh-TW")}</p>
+                        </div>
+                        <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+                          {order.items.map((item) => (
+                            <div key={item.id} className="flex items-center justify-between gap-3 py-1 text-sm">
+                              <span className="min-w-0 truncate">{item.productName}</span>
+                              <span className="shrink-0">x{item.quantity} · {currency.format(item.subtotal)}</span>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <Button type="button" variant="secondary" className="flex-1" onClick={() => openMobileOrderDrawer(order)}>
+                            <ChevronDown className="h-4 w-4 rotate-[-90deg]" />
+                            詳情
+                          </Button>
+                          {tab.allowActions && (
+                            <>
+                              <Button type="button" className="flex-1" onClick={() => updateOrderStatus(order.id, "已完成")}>
+                                已完成
+                              </Button>
+                              <Button type="button" variant="danger" className="flex-1" onClick={() => updateOrderStatus(order.id, "已取消")}>
+                                已取消
+                              </Button>
+                            </>
+                          )}
+                        </div>
+                      </article>
+                    ))}
+                    {tab.orders.length === 0 && <p className="py-6 text-center text-slate-500">{tab.empty}</p>}
+                  </div>
+                ))}
+              </div>
+
+              <div className="hidden gap-6 xl:grid-cols-3 lg:grid">
                 {[
                   { title: "待處理", orders: pendingOrders, empty: "尚無待出貨訂單", showActions: true },
                   { title: "已完成", orders: doneOrders.filter((order) => order.status === "已完成"), empty: "尚無已完成訂單", showActions: false },
@@ -3242,6 +3538,250 @@ function App() {
               </div>
             )}
           </section>
+
+          {mobileDrawer && (
+            <BottomDrawer
+              open={Boolean(mobileDrawer)}
+              title={mobileDrawer.type === "order" ? `訂單 ${mobileDrawer.order.orderNumber}` : mobileDrawer.product?.name ?? "商品"}
+              onClose={() => setMobileDrawer(null)}
+              footer={
+                mobileDrawer.type === "order-product" ? (
+                  <Button
+                    type="button"
+                    className="w-full"
+                    onClick={() => {
+                      addOrderItem(mobileDrawer.product, selectedOrderQuantity);
+                      setMobileDrawer(null);
+                    }}
+                  >
+                    加入訂單
+                  </Button>
+                ) : mobileDrawer.type === "product" ? (
+                  <div className="grid gap-2 sm:grid-cols-3">
+                    <Button
+                      type="button"
+                      className="w-full"
+                      disabled={mobileDrawer.product.stock <= 0}
+                      onClick={() => {
+                        addOrderItem(mobileDrawer.product, 1);
+                        setMobileDrawer(null);
+                      }}
+                    >
+                      加到訂單
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      disabled={!isAdmin}
+                      className="w-full"
+                      onClick={() => {
+                        editProduct(mobileDrawer.product);
+                        setMobileDrawer(null);
+                        scrollToSection("商品庫存");
+                      }}
+                    >
+                      編輯
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="danger"
+                      disabled={!isAdmin}
+                      className="w-full"
+                      onClick={() => {
+                        deleteProduct(mobileDrawer.product);
+                        setMobileDrawer(null);
+                      }}
+                    >
+                      刪除
+                    </Button>
+                  </div>
+                ) : mobileDrawer.type === "order" && mobileDrawer.order.status === "待出貨" ? (
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <Button
+                      type="button"
+                      className="w-full"
+                      onClick={() => {
+                        updateOrderStatus(mobileDrawer.order.id, "已完成");
+                        setMobileDrawer(null);
+                      }}
+                    >
+                      已完成
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="danger"
+                      className="w-full"
+                      onClick={() => {
+                        updateOrderStatus(mobileDrawer.order.id, "已取消");
+                        setMobileDrawer(null);
+                      }}
+                    >
+                      已取消
+                    </Button>
+                  </div>
+                ) : null
+              }
+            >
+              {mobileDrawer.type === "order-product" && (
+                <div className="grid gap-4">
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="font-semibold text-slate-950">{mobileDrawer.product.name}</p>
+                        <p className="mt-1 text-sm text-slate-500">{mobileDrawer.product.series}</p>
+                      </div>
+                      {mobileDrawer.product.productType === "graded" && <span className="rounded bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700">{productBadgeLabel(mobileDrawer.product)}</span>}
+                    </div>
+                    <div className="mt-3 grid gap-2 text-sm text-slate-600">
+                      <p>售價：{currency.format(mobileDrawer.product.price)}</p>
+                      <p>庫存：{formatStock(mobileDrawer.product)}</p>
+                    </div>
+                  </div>
+                  <label className="grid gap-1 text-sm font-medium text-slate-600">
+                    數量
+                    <div className="grid grid-cols-[48px_minmax(0,1fr)_48px] gap-2">
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        className="h-12 w-full px-0"
+                        onClick={() => setSelectedOrderQuantity((current) => Math.max(1, current - 1))}
+                      >
+                        <Minus className="h-4 w-4" />
+                      </Button>
+                      <input
+                        type="number"
+                        min="1"
+                        max={mobileDrawer.product.stock}
+                        value={selectedOrderQuantity}
+                        onChange={(event) => setSelectedOrderQuantity(Math.max(1, Math.min(mobileDrawer.product.stock, Number(event.target.value) || 1)))}
+                        className="h-12 w-full rounded-md border border-slate-300 bg-white px-3 text-center text-base outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-100"
+                      />
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        className="h-12 w-full px-0"
+                        onClick={() => setSelectedOrderQuantity((current) => Math.min(mobileDrawer.product.stock, current + 1))}
+                      >
+                        <Plus className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </label>
+                </div>
+              )}
+
+              {mobileDrawer.type === "product" && (
+                <div className="grid gap-4">
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="font-semibold text-slate-950">{mobileDrawer.product.name}</p>
+                        <p className="mt-1 text-sm text-slate-500">{mobileDrawer.product.series}</p>
+                      </div>
+                      {mobileDrawer.product.productType === "graded" && <span className="rounded bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700">{productBadgeLabel(mobileDrawer.product)}</span>}
+                    </div>
+                    <div className="mt-3 grid gap-2 text-sm text-slate-600">
+                      <p>商品類型：{productTypeLabel(mobileDrawer.product.productType)}</p>
+                      <p>Grade：{mobileDrawer.product.productType === "graded" ? mobileDrawer.product.grade : "-"}</p>
+                      <p>售價：{currency.format(mobileDrawer.product.price)}</p>
+                      <p>庫存：{formatStock(mobileDrawer.product)}</p>
+                      <p>包裝規格：{mobileDrawer.product.packageSpec}</p>
+                      {mobileDrawer.product.notes && <p>備註：{mobileDrawer.product.notes}</p>}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {mobileDrawer.type === "order" && (
+                <div className="grid gap-4">
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="font-semibold text-slate-950">{mobileDrawer.order.orderNumber}</p>
+                        <p className="mt-1 text-sm text-slate-500">{mobileDrawer.order.customerName || "-"}</p>
+                      </div>
+                      <span className={`rounded px-2 py-1 text-xs font-medium ${orderStatusTone(mobileDrawer.order.status)}`}>{orderStatusLabel(mobileDrawer.order.status)}</span>
+                    </div>
+                    <div className="mt-3 grid gap-2 text-sm text-slate-600">
+                      <p>LINE 名稱：{mobileDrawer.order.lineName || "-"}</p>
+                      <p>電話：{mobileDrawer.order.phone || "-"}</p>
+                      <p>7-11 門市：{mobileDrawer.order.shippingInfo || "-"}</p>
+                      <p>訂單總額：{currency.format(mobileDrawer.order.totalAmount)}</p>
+                      <p>建立時間：{new Date(mobileDrawer.order.createdAt).toLocaleString("zh-TW")}</p>
+                    </div>
+                  </div>
+                  <div className="grid gap-2">
+                    {mobileDrawer.order.items.map((item) => (
+                      <div key={item.id} className="rounded-lg border border-slate-200 bg-white p-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="min-w-0 truncate font-medium">{item.productName}</span>
+                          <span className="shrink-0 text-sm text-slate-600">x{item.quantity}</span>
+                        </div>
+                        <p className="mt-1 text-sm text-slate-500">{currency.format(item.subtotal)}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </BottomDrawer>
+          )}
+
+          <div
+            className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white/95 px-3 pt-2 backdrop-blur lg:hidden"
+            style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 0.75rem)" }}
+          >
+            <div className="mx-auto grid w-full max-w-4xl gap-2">
+              <div className="grid grid-cols-4 gap-2">
+                <Button type="button" variant="secondary" className="h-14 flex-col px-2 text-[11px]" onClick={() => scrollToSection("商品庫存")}>
+                  <Boxes className="h-4 w-4" />
+                  商品庫存
+                </Button>
+                <Button type="button" variant="secondary" className="h-14 flex-col px-2 text-[11px]" onClick={() => scrollToSection("快速下單")}>
+                  <ShoppingCart className="h-4 w-4" />
+                  快速下單
+                </Button>
+                <Button type="button" variant="secondary" className="h-14 flex-col px-2 text-[11px]" onClick={() => scrollToSection("進貨管理")}>
+                  <PackagePlus className="h-4 w-4" />
+                  進貨管理
+                </Button>
+                <Button type="button" variant="secondary" className="h-14 flex-col px-2 text-[11px]" onClick={() => scrollToSection("銷售管理")}>
+                  <History className="h-4 w-4" />
+                  銷售紀錄
+                </Button>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <Button
+                  type="button"
+                  className="h-14 px-2 text-[11px]"
+                  disabled={!isAdmin || (productCreateTab === "import" ? !importCsv.trim() : false)}
+                  onClick={() => {
+                    if (productCreateTab === "import") {
+                      importProducts();
+                      return;
+                    }
+                    productFormRef.current?.requestSubmit();
+                  }}
+                >
+                  <PackagePlus className="h-4 w-4" />
+                  {productCreateTab === "import" ? "匯入商品" : editingId ? "儲存商品" : "建立商品"}
+                </Button>
+                <Button type="button" className="h-14 px-2 text-[11px]" disabled={orderItems.length === 0} onClick={createOrder}>
+                  <ShoppingCart className="h-4 w-4" />
+                  建立訂單
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="h-14 px-2 text-[11px]"
+                  disabled={!isAdmin}
+                  onClick={() => purchaseFormRef.current?.requestSubmit()}
+                >
+                  <PackagePlus className="h-4 w-4" />
+                  {editingPurchaseId ? "儲存進貨單" : "建立進貨單"}
+                </Button>
+              </div>
+            </div>
+          </div>
+
         </div>
       </main>
 
