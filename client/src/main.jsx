@@ -52,20 +52,19 @@ const PRODUCT_TYPE_OPTIONS = [
 ];
 const GRADING_COMPANIES = ["PSA", "BGS", "CGC"];
 const ORDER_STATUS_OPTIONS = [
-  "待付款",
-  "已付款",
   "待出貨",
-  "已出貨",
   "已完成",
   "已取消"
 ];
-const ORDER_PENDING_STATUSES = new Set(["待付款", "已付款", "待出貨"]);
-const ORDER_DONE_STATUSES = new Set(["已出貨", "已完成", "已取消"]);
+const ORDER_PENDING_STATUSES = new Set(["待出貨"]);
+const ORDER_DONE_STATUSES = new Set(["已完成", "已取消"]);
 const LIST_PAGE_SIZE = 10;
 const INVENTORY_LOG_TYPE_OPTIONS = [
   { value: "全部", label: "全部異動類型" },
   { value: "purchase", label: "進貨" },
   { value: "sale", label: "銷售" },
+  { value: "cancel_sale", label: "取消訂單" },
+  { value: "completed_order", label: "完成訂單" },
   { value: "import", label: "匯入" },
   { value: "restore", label: "還原" },
   { value: "manual_adjustment", label: "手動調整" },
@@ -177,14 +176,13 @@ function productBadgeLabel(product) {
 }
 
 function orderStatusLabel(status) {
-  return status ?? "待付款";
+  return status ?? "待出貨";
 }
 
 function orderStatusTone(status) {
   if (status === "已取消") return "bg-slate-100 text-slate-700";
-  if (status === "已完成" || status === "已出貨") return "bg-emerald-50 text-emerald-700";
+  if (status === "已完成") return "bg-emerald-50 text-emerald-700";
   if (status === "待出貨") return "bg-amber-50 text-amber-700";
-  if (status === "已付款") return "bg-teal-50 text-teal-700";
   return "bg-rose-50 text-rose-700";
 }
 
@@ -252,8 +250,9 @@ function inventoryLogTypeLabel(type) {
 
 function inventoryLogTypeTone(type) {
   const normalizedType = normalizeInventoryLogType(type);
-  if (normalizedType === "void_sale" || normalizedType === "void_purchase") return "bg-slate-100 text-slate-700";
+  if (normalizedType === "void_sale" || normalizedType === "void_purchase" || normalizedType === "cancel_sale") return "bg-slate-100 text-slate-700";
   if (normalizedType === "sale") return "bg-rose-50 text-rose-700";
+  if (normalizedType === "completed_order") return "bg-emerald-50 text-emerald-700";
   if (normalizedType === "manual_adjustment") return "bg-amber-50 text-amber-700";
   return "bg-emerald-50 text-emerald-700";
 }
@@ -525,8 +524,7 @@ function App() {
     customerName: "",
     phone: "",
     shippingInfo: "",
-    lineName: "",
-    status: "待付款"
+    lineName: ""
   });
   const [orderCustomerSearch, setOrderCustomerSearch] = useState("");
   const [orderStatusFilter, setOrderStatusFilter] = useState("全部");
@@ -750,10 +748,6 @@ function App() {
   const orderTotal = useMemo(
     () => orderItems.reduce((sum, item) => sum + item.quantity * Number(item.product.price || 0), 0),
     [orderItems]
-  );
-  const selectedOrderProduct = useMemo(
-    () => orderProducts.find((product) => product.id === selectedOrderProductId) ?? null,
-    [orderProducts, selectedOrderProductId]
   );
   const latestAuditTime = auditLogs[0]?.createdAt
     ? new Date(auditLogs[0].createdAt).toLocaleString("zh-TW")
@@ -1037,8 +1031,7 @@ function App() {
         customerName: "",
         phone: "",
         shippingInfo: "",
-        lineName: "",
-        status: "待付款"
+        lineName: ""
       });
       setAutoSaveStatus("已自動儲存");
       await load();
@@ -1342,8 +1335,7 @@ function App() {
         customerName: "",
         phone: "",
         shippingInfo: "",
-        lineName: "",
-        status: "待付款"
+        lineName: ""
       });
       await load();
       window.alert(`測試資料已清除，執行前備份已建立：${result.backup?.filename ?? "已建立"}`);
@@ -2468,12 +2460,6 @@ function App() {
                         LINE 名稱
                         <TextInput value={orderForm.lineName} onChange={(e) => setOrderForm({ ...orderForm, lineName: e.target.value })} placeholder="LINE 顯示名稱" />
                       </label>
-                      <label className="grid gap-1 text-sm font-medium text-slate-600">
-                        訂單狀態
-                        <SelectInput value={orderForm.status} onChange={(e) => setOrderForm({ ...orderForm, status: e.target.value })}>
-                          {ORDER_STATUS_OPTIONS.map((status) => <option key={status} value={status}>{status}</option>)}
-                        </SelectInput>
-                      </label>
                     </div>
                     <div className="grid gap-2 border-t border-slate-200 pt-4">
                       {orderItems.map((item) => (
@@ -2528,7 +2514,7 @@ function App() {
               <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <h3 className="text-base font-semibold">訂單管理區</h3>
-                  <p className="mt-1 text-sm text-slate-500">左邊待處理，右邊已完成。</p>
+                  <p className="mt-1 text-sm text-slate-500">三欄檢視：待處理、已完成、已取消。</p>
                 </div>
                 <div className="grid gap-2 sm:grid-cols-[minmax(220px,1fr)_180px]">
                   <div className="relative min-w-0">
@@ -2536,7 +2522,7 @@ function App() {
                     <input
                       value={orderCustomerSearch}
                       onChange={(event) => setOrderCustomerSearch(event.target.value)}
-                      placeholder="搜尋客戶 / 電話 / LINE"
+                      placeholder="搜尋客戶 / 訂單編號 / LINE"
                       className="h-12 w-full rounded-md border border-slate-300 bg-white pl-10 pr-3 text-base outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-100 sm:h-10 sm:text-sm"
                     />
                   </div>
@@ -2546,77 +2532,57 @@ function App() {
                   </SelectInput>
                 </div>
               </div>
-              <div className="grid gap-6 xl:grid-cols-2">
-                <div>
-                  <h4 className="mb-3 text-sm font-semibold text-slate-700">待處理 {number.format(pendingOrders.length)}</h4>
-                  <div className="grid gap-3">
-                    {pendingOrders.map((order) => (
-                      <article key={order.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3 shadow-sm">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="font-semibold">{order.orderNumber}</p>
-                            <p className="mt-1 text-sm text-slate-500">{order.customerName || "-"} · {order.phone || "-"}</p>
-                            <p className="mt-1 text-sm text-slate-500">{order.shippingInfo || "-"} · {order.lineName || "-"}</p>
+              <div className="grid gap-6 xl:grid-cols-3">
+                {[
+                  { title: "待處理", orders: pendingOrders, empty: "尚無待出貨訂單", showActions: true },
+                  { title: "已完成", orders: doneOrders.filter((order) => order.status === "已完成"), empty: "尚無已完成訂單", showActions: false },
+                  { title: "已取消", orders: doneOrders.filter((order) => order.status === "已取消"), empty: "尚無已取消訂單", showActions: false }
+                ].map((column) => (
+                  <div key={column.title} className="grid gap-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <h4 className="text-sm font-semibold text-slate-700">{column.title} {number.format(column.orders.length)}</h4>
+                    </div>
+                    <div className="grid gap-3">
+                      {column.orders.map((order) => (
+                        <article key={order.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3 shadow-sm">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="font-semibold">{order.orderNumber}</p>
+                              <p className="mt-1 text-sm text-slate-500">{order.customerName || "-"}</p>
+                              <p className="mt-1 text-sm text-slate-500">{order.lineName || "-"} · {order.phone || "-"}</p>
+                              <p className="mt-1 text-sm text-slate-500">{order.shippingInfo || "-"}</p>
+                            </div>
+                            <span className={`rounded px-2 py-1 text-xs font-medium ${orderStatusTone(order.status)}`}>{orderStatusLabel(order.status)}</span>
                           </div>
-                          <span className={`rounded px-2 py-1 text-xs font-medium ${orderStatusTone(order.status)}`}>{orderStatusLabel(order.status)}</span>
-                        </div>
-                        <div className="mt-3 grid gap-2 text-sm text-slate-600">
-                          <p>金額 {currency.format(order.totalAmount)}</p>
-                          <p>建立時間 {new Date(order.createdAt).toLocaleString("zh-TW")}</p>
-                          <div className="grid gap-2 rounded-md border border-slate-200 bg-white p-3">
-                            {order.items.map((item) => (
-                              <div key={item.id} className="flex items-center justify-between gap-3">
-                                <span className="min-w-0 truncate">{item.productName}</span>
-                                <span className="shrink-0">x{item.quantity} · {currency.format(item.subtotal)}</span>
-                              </div>
-                            ))}
+                          <div className="mt-3 grid gap-2 text-sm text-slate-600">
+                            <p>商品數量 {number.format(order.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0))}</p>
+                            <p>訂單總額 {currency.format(order.totalAmount)}</p>
+                            <p>建立時間 {new Date(order.createdAt).toLocaleString("zh-TW")}</p>
+                            <div className="grid gap-2 rounded-md border border-slate-200 bg-white p-3">
+                              {order.items.map((item) => (
+                                <div key={item.id} className="flex items-center justify-between gap-3">
+                                  <span className="min-w-0 truncate">{item.productName}</span>
+                                  <span className="shrink-0">x{item.quantity} · {currency.format(item.subtotal)}</span>
+                                </div>
+                              ))}
+                            </div>
                           </div>
-                        </div>
-                        <div className="mt-3">
-                          <SelectInput value={order.status} onChange={(event) => updateOrderStatus(order.id, event.target.value)}>
-                            {ORDER_STATUS_OPTIONS.map((status) => <option key={status} value={status}>{status}</option>)}
-                          </SelectInput>
-                        </div>
-                      </article>
-                    ))}
-                    {pendingOrders.length === 0 && <p className="py-6 text-center text-slate-500">尚無待處理訂單</p>}
+                          {column.showActions && (
+                            <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                              <Button type="button" onClick={() => updateOrderStatus(order.id, "已完成")} className="w-full">
+                                已完成
+                              </Button>
+                              <Button type="button" variant="danger" onClick={() => updateOrderStatus(order.id, "已取消")} className="w-full">
+                                已取消
+                              </Button>
+                            </div>
+                          )}
+                        </article>
+                      ))}
+                      {column.orders.length === 0 && <p className="py-6 text-center text-slate-500">{column.empty}</p>}
+                    </div>
                   </div>
-                </div>
-                <div>
-                  <h4 className="mb-3 text-sm font-semibold text-slate-700">已完成 {number.format(doneOrders.length)}</h4>
-                  <div className="grid gap-3">
-                    {doneOrders.map((order) => (
-                      <article key={order.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3 shadow-sm">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="font-semibold">{order.orderNumber}</p>
-                            <p className="mt-1 text-sm text-slate-500">{order.customerName || "-"} · {order.phone || "-"}</p>
-                            <p className="mt-1 text-sm text-slate-500">{order.shippingInfo || "-"} · {order.lineName || "-"}</p>
-                          </div>
-                          <span className={`rounded px-2 py-1 text-xs font-medium ${orderStatusTone(order.status)}`}>{orderStatusLabel(order.status)}</span>
-                        </div>
-                        <div className="mt-3 grid gap-2 text-sm text-slate-600">
-                          <p>金額 {currency.format(order.totalAmount)}</p>
-                          <p>建立時間 {new Date(order.createdAt).toLocaleString("zh-TW")}</p>
-                          <div className="grid gap-2 rounded-md border border-slate-200 bg-white p-3">
-                            {order.items.map((item) => (
-                              <div key={item.id} className="flex items-center justify-between gap-3">
-                                <span className="min-w-0 truncate">{item.productName}</span>
-                                <span className="shrink-0">x{item.quantity} · {currency.format(item.subtotal)}</span>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                        <div className="mt-3">
-                          <SelectInput value={order.status} onChange={(event) => updateOrderStatus(order.id, event.target.value)}>
-                            {ORDER_STATUS_OPTIONS.map((status) => <option key={status} value={status}>{status}</option>)}
-                          </SelectInput>
-                        </div>
-                      </article>
-                    ))}
-                    {doneOrders.length === 0 && <p className="py-6 text-center text-slate-500">尚無已完成訂單</p>}
-                  </div>
-                </div>
+                ))}
               </div>
             </div>
           </section>

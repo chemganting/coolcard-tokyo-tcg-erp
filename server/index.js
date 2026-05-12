@@ -17,7 +17,7 @@ const allowedUnits = new Set(["單張", "包", "盒", "箱", "組", "其他"]);
 const productTypes = new Set(["normal", "graded"]);
 const gradingCompanies = new Set(["PSA", "BGS", "CGC"]);
 const paymentStatuses = new Set(["未付款", "已付款", "部分付款"]);
-const orderStatuses = new Set(["待付款", "已付款", "待出貨", "已出貨", "已完成", "已取消"]);
+const orderStatuses = new Set(["待出貨", "已完成", "已取消"]);
 const reportSheetTabs = ["今日營收", "庫存總表", "熱銷排行"];
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const backupDir = process.env.BACKUP_DIR
@@ -137,6 +137,12 @@ function purchasePayload(body) {
   };
 }
 
+function normalizeOrderStatus(status) {
+  if (status === "已取消") return "已取消";
+  if (status === "已完成" || status === "已出貨") return "已完成";
+  return "待出貨";
+}
+
 function validatePurchase(purchase) {
   return Boolean(
     purchase.supplier &&
@@ -155,7 +161,7 @@ function orderPayload(body) {
     phone: String(body.phone ?? "").trim(),
     shippingInfo: String(body.shippingInfo ?? "").trim(),
     lineName: String(body.lineName ?? "").trim(),
-    status: orderStatuses.has(String(body.status ?? "").trim()) ? String(body.status).trim() : "待付款",
+    status: "待出貨",
     items: Array.isArray(body.items)
       ? body.items.map((item) => ({
           productId: Number(item.productId),
@@ -181,9 +187,8 @@ function orderStatusLabel(status) {
 
 function orderStatusTone(status) {
   if (status === "已取消") return "bg-slate-100 text-slate-700";
-  if (status === "已完成" || status === "已出貨") return "bg-emerald-50 text-emerald-700";
+  if (status === "已完成") return "bg-emerald-50 text-emerald-700";
   if (status === "待出貨") return "bg-amber-50 text-amber-700";
-  if (status === "已付款") return "bg-teal-50 text-teal-700";
   return "bg-rose-50 text-rose-700";
 }
 
@@ -733,7 +738,7 @@ async function restoreDatabaseBackup(filename) {
           order.phone ?? "",
           order.shipping_info ?? order.shippingInfo ?? "",
           order.line_name ?? order.lineName ?? "",
-          order.status ?? "待付款",
+          normalizeOrderStatus(order.status ?? order.orderStatus),
           order.total_amount ?? order.totalAmount ?? 0,
           order.created_by,
           order.created_at,
@@ -1159,6 +1164,7 @@ async function restoreSaleSnapshot(client, sale) {
 }
 
 async function restoreOrderSnapshot(client, order) {
+  const normalizedStatus = normalizeOrderStatus(order.status ?? order.orderStatus);
   await client.query(
     `
       INSERT INTO orders (id, customer_name, phone, shipping_info, line_name, status, total_amount, created_by, created_at, updated_at)
@@ -1179,7 +1185,7 @@ async function restoreOrderSnapshot(client, order) {
       order.phone ?? "",
       order.shipping_info ?? order.shippingInfo ?? "",
       order.line_name ?? order.lineName ?? "",
-      order.status ?? "待付款",
+      normalizedStatus,
       order.total_amount ?? order.totalAmount ?? 0,
       order.created_by ?? order.createdBy ?? null,
       order.created_at,
@@ -2317,7 +2323,7 @@ app.get("/api/orders", currentUser, async (request, response, next) => {
 
   if (search) {
     params.push(`%${search}%`);
-    filters.push(`(orders.customer_name ILIKE $${params.length} OR orders.phone ILIKE $${params.length} OR orders.line_name ILIKE $${params.length})`);
+    filters.push(`(orders.customer_name ILIKE $${params.length} OR orders.phone ILIKE $${params.length} OR orders.line_name ILIKE $${params.length} OR ('ORD-' || LPAD(orders.id::text, 6, '0')) ILIKE $${params.length})`);
   }
   if (status && orderStatuses.has(status)) {
     params.push(status);
@@ -2491,7 +2497,7 @@ app.post("/api/orders", currentUser, async (request, response, next) => {
 
 async function updateOrderStatus(request, response, next) {
   const nextStatus = String(request.body.status ?? "").trim();
-  if (!orderStatuses.has(nextStatus)) {
+  if (!["已完成", "已取消"].includes(nextStatus)) {
     return response.status(400).json({ message: "訂單狀態不合法" });
   }
 
@@ -2509,6 +2515,10 @@ async function updateOrderStatus(request, response, next) {
     }
 
     const beforeSnapshot = await orderById(client, beforeOrder.id);
+    if (beforeOrder.status !== "待出貨") {
+      await client.query("ROLLBACK");
+      return response.status(409).json({ message: "只有待出貨訂單可以調整狀態" });
+    }
     if (beforeOrder.status === nextStatus) {
       await client.query("ROLLBACK");
       return response.json(rowsToCamel([beforeSnapshot])[0]);
@@ -2520,60 +2530,70 @@ async function updateOrderStatus(request, response, next) {
       itemMap.set(item.product_id, (itemMap.get(item.product_id) ?? 0) + Number(item.quantity));
     }
 
-    const restoring = beforeOrder.status === "已取消" && nextStatus !== "已取消";
-    const cancelling = beforeOrder.status !== "已取消" && nextStatus === "已取消";
+    const cancelling = nextStatus === "已取消";
     const beforeProducts = [];
     const afterProducts = [];
 
-    if (restoring || cancelling) {
-      const productIds = [...itemMap.keys()];
-      const productResult = await client.query(
-        `
-          SELECT id, name, series, rarity, condition, product_type, grading_company, grade, cert_number, unit, cards_per_unit, package_spec, cost::text, average_cost::text, price::text, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at
-          FROM products
-          WHERE id = ANY($1)
-          ORDER BY id
-          FOR UPDATE
-        `,
-        [productIds]
-      );
-      const productMap = new Map(productResult.rows.map((product) => [product.id, product]));
-      if (productMap.size !== productIds.length) {
+    const productIds = [...itemMap.keys()];
+    const productResult = await client.query(
+      `
+        SELECT id, name, series, rarity, condition, product_type, grading_company, grade, cert_number, unit, cards_per_unit, package_spec, cost::text, average_cost::text, price::text, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at
+        FROM products
+        WHERE id = ANY($1)
+        ORDER BY id
+        FOR UPDATE
+      `,
+      [productIds]
+    );
+    const productMap = new Map(productResult.rows.map((product) => [product.id, product]));
+    if (productMap.size !== productIds.length) {
+      await client.query("ROLLBACK");
+      return response.status(404).json({ message: "商品不存在" });
+    }
+
+    for (const productId of productIds) {
+      const product = productMap.get(productId);
+      const quantity = itemMap.get(productId);
+      beforeProducts.push({ ...product });
+      if (cancelling && product.stock + quantity < 0) {
         await client.query("ROLLBACK");
-        return response.status(404).json({ message: "商品不存在" });
+        return response.status(409).json({ message: `${product.name} 庫存不足，無法取消訂單` });
       }
+    }
 
-      for (const productId of productIds) {
-        const product = productMap.get(productId);
-        const quantity = itemMap.get(productId);
-        beforeProducts.push({ ...product });
-        if (restoring && product.stock < quantity) {
-          await client.query("ROLLBACK");
-          return response.status(409).json({ message: `${product.name} 庫存不足，無法恢復訂單` });
-        }
+    for (const productId of productIds) {
+      const product = productMap.get(productId);
+      const quantity = itemMap.get(productId);
+      if (cancelling) {
+        await client.query("UPDATE products SET stock = stock + $1, updated_at = NOW() WHERE id = $2", [quantity, productId]);
       }
-
-      for (const productId of productIds) {
-        const product = productMap.get(productId);
-        const quantity = itemMap.get(productId);
-        if (cancelling) {
-          await client.query("UPDATE products SET stock = stock + $1, updated_at = NOW() WHERE id = $2", [quantity, productId]);
-        } else {
-          await client.query("UPDATE products SET stock = stock - $1, updated_at = NOW() WHERE id = $2", [quantity, productId]);
-        }
-        const afterProduct = await productById(client, productId);
-        afterProducts.push(afterProduct);
+      const afterProduct = await productById(client, productId);
+      afterProducts.push(afterProduct);
+      if (cancelling) {
         await writeInventoryLog(
           client,
           request,
           productId,
-          cancelling ? "sale_void" : "sale",
-          cancelling ? quantity : -quantity,
+          "cancel_sale",
+          quantity,
           product.stock,
           afterProduct.stock,
           "order",
           beforeOrder.id,
-          cancelling ? "訂單取消補回庫存" : "訂單恢復扣庫存"
+          "訂單已取消，補回庫存"
+        );
+      } else {
+        await writeInventoryLog(
+          client,
+          request,
+          productId,
+          "completed_order",
+          0,
+          product.stock,
+          afterProduct.stock,
+          "order",
+          beforeOrder.id,
+          "訂單已完成"
         );
       }
     }
@@ -2586,7 +2606,7 @@ async function updateOrderStatus(request, response, next) {
       "update",
       "order",
       { order: beforeSnapshot, products: beforeProducts.length ? beforeProducts : undefined },
-      { order: afterOrder, products: afterProducts.length ? afterProducts : undefined }
+      { order: afterOrder, statusMessage: cancelling ? "訂單已取消" : "訂單已完成", products: afterProducts.length ? afterProducts : undefined }
     );
     await client.query("COMMIT");
     response.json(rowsToCamel([afterOrder])[0]);
@@ -2783,19 +2803,62 @@ app.post("/api/undo", currentUser, async (request, response, next) => {
       }
     } else if (log.entity_type === "order") {
       if (log.action_type === "create") {
-        if (after.order) {
-          await restoreOrderSnapshot(client, after.order);
-          await client.query("UPDATE orders SET status = '已取消', updated_at = NOW() WHERE id = $1", [after.order.id]);
-        }
-        for (const product of before.products ?? []) {
-          await restoreProductSnapshot(client, product);
+        const orderId = after.order?.id ?? after.id;
+        if (orderId) {
+          const currentOrder = await orderById(client, orderId);
+          if (currentOrder) {
+            const items = await orderItemsByOrderId(client, orderId);
+            for (const item of items) {
+              const productResult = await client.query("SELECT id, stock FROM products WHERE id = $1 FOR UPDATE", [item.product_id]);
+              const product = productResult.rows[0];
+              if (!product) continue;
+              const stockAfter = product.stock + Number(item.quantity);
+              await client.query("UPDATE products SET stock = $1, updated_at = NOW() WHERE id = $2", [stockAfter, item.product_id]);
+              await writeInventoryLog(
+                client,
+                request,
+                item.product_id,
+                "cancel_sale",
+                Number(item.quantity),
+                product.stock,
+                stockAfter,
+                "order",
+                orderId,
+                "還原建立訂單補回庫存"
+              );
+            }
+            await client.query("UPDATE orders SET status = '已取消', updated_at = NOW() WHERE id = $1", [orderId]);
+          }
         }
       } else if (log.action_type === "update") {
-        if (before.order) {
-          await restoreOrderSnapshot(client, before.order);
-        }
-        for (const product of before.products ?? []) {
-          await restoreProductSnapshot(client, product);
+        const orderId = after.order?.id ?? before.order?.id ?? after.id ?? before.id;
+        if (orderId) {
+          const currentOrder = await orderById(client, orderId);
+          if (currentOrder && before.order?.status === "待出貨") {
+            const items = await orderItemsByOrderId(client, orderId);
+            if (currentOrder.status === "已取消") {
+              for (const item of items) {
+                const productResult = await client.query("SELECT id, stock FROM products WHERE id = $1 FOR UPDATE", [item.product_id]);
+                const product = productResult.rows[0];
+                if (!product) continue;
+                const stockAfter = product.stock - Number(item.quantity);
+                await client.query("UPDATE products SET stock = $1, updated_at = NOW() WHERE id = $2", [stockAfter, item.product_id]);
+                await writeInventoryLog(
+                  client,
+                  request,
+                  item.product_id,
+                  "sale",
+                  -Number(item.quantity),
+                  product.stock,
+                  stockAfter,
+                  "order",
+                  orderId,
+                  "還原訂單取消前的扣庫存"
+                );
+              }
+            }
+            await client.query("UPDATE orders SET status = '待出貨', updated_at = NOW() WHERE id = $1", [orderId]);
+          }
         }
       }
     } else if (log.entity_type === "user") {
