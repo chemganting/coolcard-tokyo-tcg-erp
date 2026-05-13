@@ -19,6 +19,7 @@ const gradingCompanies = new Set(["PSA", "BGS", "CGC"]);
 const paymentStatuses = new Set(["未付款", "已付款", "部分付款"]);
 const orderStatuses = new Set(["待出貨", "已完成", "已取消"]);
 const reportSheetTabs = ["今日營收", "庫存總表", "熱銷排行"];
+const reportTimeZone = process.env.REPORT_TIMEZONE ?? process.env.BACKUP_TIMEZONE ?? "Asia/Taipei";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const backupDir = process.env.BACKUP_DIR
   ? path.resolve(process.env.BACKUP_DIR)
@@ -200,11 +201,37 @@ function productCostExpression() {
   return "COALESCE(NULLIF(products.average_cost, 0), products.cost)";
 }
 
+function reportMonthSheetTitle(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("sv-SE", {
+    timeZone: reportTimeZone,
+    year: "numeric",
+    month: "2-digit"
+  }).formatToParts(date);
+  const value = (partType) => parts.find((part) => part.type === partType)?.value ?? "00";
+  return `${value("year")}${value("month")}營收`;
+}
+
+function reportSalesRows(rows) {
+  return rows.map((row) => [
+    row.date,
+    row.orderNumber,
+    row.customerName,
+    row.productName,
+    row.quantity,
+    row.revenue,
+    row.cost,
+    row.profit,
+    `${Number(row.marginRate ?? 0).toFixed(2)}%`,
+    row.staffName
+  ]);
+}
+
 async function getProfitReport() {
   const [
     todaySummary,
     monthSummary,
     todayRevenueRows,
+    monthRevenueRows,
     inventoryRows,
     hotRankingRows,
     lowStockRows
@@ -231,10 +258,11 @@ async function getProfitReport() {
     query(`
       SELECT
         to_char(sales.sold_at, 'YYYY-MM-DD') AS date,
+        COALESCE(('ORD-' || LPAD(orders.id::text, 6, '0')), '-') AS order_number,
+        COALESCE(orders.customer_name, '-') AS customer_name,
         products.name AS product_name,
         sales.quantity,
-        sales.unit_price::float AS unit_price,
-        sales.total::float AS total,
+        sales.total::float AS revenue,
         (COALESCE(NULLIF(products.average_cost, 0), products.cost) * sales.quantity)::float AS cost,
         (sales.total - COALESCE(NULLIF(products.average_cost, 0), products.cost) * sales.quantity)::float AS profit,
         CASE WHEN sales.total = 0 THEN 0 ELSE ((sales.total - COALESCE(NULLIF(products.average_cost, 0), products.cost) * sales.quantity) / sales.total * 100)::float END AS margin_rate,
@@ -242,7 +270,28 @@ async function getProfitReport() {
       FROM sales
       JOIN products ON products.id = sales.product_id
       JOIN users ON users.id = sales.user_id
+      LEFT JOIN orders ON orders.id = sales.order_id
       WHERE sales.sold_at = CURRENT_DATE
+        AND sales.voided_at IS NULL
+      ORDER BY sales.id DESC
+    `),
+    query(`
+      SELECT
+        to_char(sales.sold_at, 'YYYY-MM-DD') AS date,
+        COALESCE(('ORD-' || LPAD(orders.id::text, 6, '0')), '-') AS order_number,
+        COALESCE(orders.customer_name, '-') AS customer_name,
+        products.name AS product_name,
+        sales.quantity,
+        sales.total::float AS revenue,
+        (COALESCE(NULLIF(products.average_cost, 0), products.cost) * sales.quantity)::float AS cost,
+        (sales.total - COALESCE(NULLIF(products.average_cost, 0), products.cost) * sales.quantity)::float AS profit,
+        CASE WHEN sales.total = 0 THEN 0 ELSE ((sales.total - COALESCE(NULLIF(products.average_cost, 0), products.cost) * sales.quantity) / sales.total * 100)::float END AS margin_rate,
+        users.name AS staff_name
+      FROM sales
+      JOIN products ON products.id = sales.product_id
+      JOIN users ON users.id = sales.user_id
+      LEFT JOIN orders ON orders.id = sales.order_id
+      WHERE date_trunc('month', sales.sold_at) = date_trunc('month', CURRENT_DATE)
         AND sales.voided_at IS NULL
       ORDER BY sales.id DESC
     `),
@@ -303,13 +352,17 @@ async function getProfitReport() {
       todayProfit,
       todayMarginRate: grossMargin(today.revenue, today.cost),
       monthRevenue: month.revenue,
+      monthCost: month.cost,
       monthProfit,
+      monthMarginRate: grossMargin(month.revenue, month.cost),
       totalSalesQuantity: today.quantity
     },
     todayRevenueRows: rowsToCamel(todayRevenueRows.rows),
+    monthRevenueRows: rowsToCamel(monthRevenueRows.rows),
     inventoryRows: rowsToCamel(inventoryRows.rows),
     hotRankingRows: rowsToCamel(hotRankingRows.rows).map((row, index) => ({ rank: index + 1, ...row })),
-    lowStockRows: rowsToCamel(lowStockRows.rows)
+    lowStockRows: rowsToCamel(lowStockRows.rows),
+    monthSheetTitle: reportMonthSheetTitle()
   };
 }
 
@@ -333,20 +386,15 @@ async function googleSheetsClient() {
 }
 
 function sheetValues(report) {
+  const reportHeaders = ["日期", "訂單編號", "客戶名稱", "商品名稱", "數量", "營業額", "成本", "毛利", "毛利率", "店員"];
   return {
     "今日營收": [
-      ["日期", "商品名稱", "數量", "單價", "總金額", "成本", "毛利", "毛利率", "店員"],
-      ...report.todayRevenueRows.map((row) => [
-        row.date,
-        row.productName,
-        row.quantity,
-        row.unitPrice,
-        row.total,
-        row.cost,
-        row.profit,
-        `${row.marginRate.toFixed(2)}%`,
-        row.staffName
-      ])
+      reportHeaders,
+      ...reportSalesRows(report.todayRevenueRows)
+    ],
+    [report.monthSheetTitle ?? reportMonthSheetTitle()]: [
+      reportHeaders,
+      ...reportSalesRows(report.monthRevenueRows)
     ],
     "庫存總表": [
       ["商品名稱", "系列", "稀有度", "卡況", "單位", "包裝規格", "進貨成本", "售價", "庫存數量", "庫存總成本", "預估庫存售價", "預估毛利"],
@@ -380,10 +428,10 @@ function sheetValues(report) {
   };
 }
 
-async function ensureSheetTabs(sheets, spreadsheetId) {
+async function ensureSheetTabs(sheets, spreadsheetId, sheetTitles = reportSheetTabs) {
   const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
   const existing = new Set(spreadsheet.data.sheets?.map((sheet) => sheet.properties?.title).filter(Boolean));
-  const requests = reportSheetTabs
+  const requests = sheetTitles
     .filter((title) => !existing.has(title))
     .map((title) => ({ addSheet: { properties: { title } } }));
 
@@ -400,8 +448,8 @@ async function syncReportToGoogleSheets(report) {
   if (!spreadsheetId) throw new Error("GOOGLE_SHEET_ID is not configured");
 
   const sheets = await googleSheetsClient();
-  await ensureSheetTabs(sheets, spreadsheetId);
   const values = sheetValues(report);
+  await ensureSheetTabs(sheets, spreadsheetId, Object.keys(values));
 
   for (const [title, rows] of Object.entries(values)) {
     await sheets.spreadsheets.values.clear({
@@ -415,6 +463,31 @@ async function syncReportToGoogleSheets(report) {
       requestBody: { values: rows }
     });
   }
+}
+
+let reportSheetSyncPromise = null;
+let reportSheetSyncQueued = false;
+
+async function syncReportsInBackground() {
+  if (!process.env.GOOGLE_SHEET_ID || !process.env.GOOGLE_SERVICE_ACCOUNT_JSON) return;
+  reportSheetSyncQueued = true;
+  if (reportSheetSyncPromise) return reportSheetSyncPromise;
+
+  reportSheetSyncPromise = (async () => {
+    while (reportSheetSyncQueued) {
+      reportSheetSyncQueued = false;
+      try {
+        const report = await getProfitReport();
+        await syncReportToGoogleSheets(report);
+      } catch (error) {
+        console.error("自動同步月報表失敗", error);
+      }
+    }
+  })().finally(() => {
+    reportSheetSyncPromise = null;
+  });
+
+  return reportSheetSyncPromise;
 }
 
 function backupStorageTargets() {
@@ -1354,6 +1427,8 @@ app.put("/api/users/:id", currentUser, requireAdmin, async (request, response, n
     await writeAuditLog(client, request, "update", "user", before, result.rows[0]);
     await client.query("COMMIT");
     response.json({ ok: true });
+
+    void syncReportsInBackground();
   } catch (error) {
     await client.query("ROLLBACK");
     next(error);
@@ -1381,6 +1456,8 @@ app.patch("/api/users/:id/password", currentUser, requireAdmin, async (request, 
     await writeAuditLog(client, request, "update", "user", before, result.rows[0]);
     await client.query("COMMIT");
     response.json({ ok: true });
+
+    void syncReportsInBackground();
   } catch (error) {
     await client.query("ROLLBACK");
     next(error);
@@ -2253,6 +2330,8 @@ async function voidSale(request, response, next) {
     await writeAuditLog(client, request, "update", "sale", { sale, product: beforeProduct }, { sale: voidedSale.rows[0], product: afterProduct });
     await client.query("COMMIT");
     response.json({ ok: true });
+
+    void syncReportsInBackground();
   } catch (error) {
     await client.query("ROLLBACK");
     next(error);
@@ -2544,6 +2623,10 @@ async function updateOrderStatus(request, response, next) {
     );
     await client.query("COMMIT");
     response.json(rowsToCamel([afterOrder])[0]);
+
+    if (nextStatus === "已完成") {
+      void syncReportsInBackground();
+    }
   } catch (error) {
     await client.query("ROLLBACK");
     next(error);

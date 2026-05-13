@@ -35,6 +35,10 @@ const currency = new Intl.NumberFormat("zh-TW", {
   maximumFractionDigits: 0
 });
 const number = new Intl.NumberFormat("zh-TW");
+const oneDecimal = new Intl.NumberFormat("zh-TW", {
+  minimumFractionDigits: 1,
+  maximumFractionDigits: 1
+});
 
 function authFromStorage() {
   try {
@@ -163,6 +167,10 @@ async function fetchWithWake(path, options = {}) {
 
 function formatStock(product) {
   return `${number.format(product.stock ?? 0)} ${product.unit ?? "單張"}`;
+}
+
+function formatRate(value) {
+  return `${oneDecimal.format(Number(value ?? 0))}%`;
 }
 
 function productTypeLabel(productType) {
@@ -1743,7 +1751,7 @@ function App() {
                 <StatCard icon={CalendarDays} label="今日營業額" value={currency.format(dashboard?.todayRevenue ?? 0)} detail="依銷售日期統計" tone="bg-teal-50 text-teal-700" />
                 <StatCard icon={BarChart3} label="今日成本" value={currency.format(dashboard?.todayCost ?? 0)} detail="依平均進貨成本計算" tone="bg-slate-50 text-slate-700" />
                 <StatCard icon={TrendingUp} label="今日毛利" value={currency.format(dashboard?.todayProfit ?? 0)} detail="今日營業額扣除成本" tone="bg-emerald-50 text-emerald-700" />
-                <StatCard icon={Boxes} label="毛利率" value={`${number.format(dashboard?.todayMarginRate ?? 0)}%`} detail={`低庫存 ${number.format(dashboard?.lowStockCount ?? 0)} 項`} tone="bg-cyan-50 text-cyan-700" />
+                <StatCard icon={Boxes} label="毛利率" value={formatRate(dashboard?.todayMarginRate ?? 0)} detail={`低庫存 ${number.format(dashboard?.lowStockCount ?? 0)} 項`} tone="bg-cyan-50 text-cyan-700" />
               </>
             )}
           </section>
@@ -1774,11 +1782,32 @@ function App() {
               )}
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-              <StatCard icon={CalendarDays} label="今日成本" value={currency.format(profitReport?.summary?.todayCost ?? 0)} detail="依今日銷售成本計算" tone="bg-slate-50 text-slate-700" />
-              <StatCard icon={TrendingUp} label="今日毛利" value={currency.format(profitReport?.summary?.todayProfit ?? 0)} detail="今日營業額扣除成本" tone="bg-emerald-50 text-emerald-700" />
-              <StatCard icon={BarChart3} label="今日毛利率" value={`${number.format(profitReport?.summary?.todayMarginRate ?? 0)}%`} detail="毛利 / 營業額" tone="bg-cyan-50 text-cyan-700" />
-              <StatCard icon={TrendingUp} label="本月毛利" value={currency.format(profitReport?.summary?.monthProfit ?? 0)} detail={`本月營業額 ${currency.format(profitReport?.summary?.monthRevenue ?? 0)}`} tone="bg-indigo-50 text-indigo-700" />
+            <div className="grid gap-6 xl:grid-cols-2">
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <CalendarDays className="h-5 w-5 text-slate-700" />
+                  <h3 className="text-base font-semibold text-slate-900">今日分析</h3>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                  <StatCard icon={TrendingUp} label="今日營收" value={currency.format(profitReport?.summary?.todayRevenue ?? 0)} detail="今日銷售總額" tone="bg-teal-50 text-teal-700" />
+                  <StatCard icon={CalendarDays} label="今日成本" value={currency.format(profitReport?.summary?.todayCost ?? 0)} detail="依今日銷售成本計算" tone="bg-slate-50 text-slate-700" />
+                  <StatCard icon={TrendingUp} label="今日毛利" value={currency.format(profitReport?.summary?.todayProfit ?? 0)} detail="營收扣除成本" tone="bg-emerald-50 text-emerald-700" />
+                  <StatCard icon={BarChart3} label="今日毛利率" value={formatRate(profitReport?.summary?.todayMarginRate ?? 0)} detail="毛利 / 營收" tone="bg-cyan-50 text-cyan-700" />
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <TrendingUp className="h-5 w-5 text-slate-700" />
+                  <h3 className="text-base font-semibold text-slate-900">本月分析</h3>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                  <StatCard icon={TrendingUp} label="本月營收" value={currency.format(profitReport?.summary?.monthRevenue ?? 0)} detail="當月銷售總額" tone="bg-indigo-50 text-indigo-700" />
+                  <StatCard icon={CalendarDays} label="本月成本" value={currency.format(profitReport?.summary?.monthCost ?? 0)} detail="依當月銷售成本計算" tone="bg-slate-50 text-slate-700" />
+                  <StatCard icon={TrendingUp} label="本月毛利" value={currency.format(profitReport?.summary?.monthProfit ?? 0)} detail="營收扣除成本" tone="bg-emerald-50 text-emerald-700" />
+                  <StatCard icon={BarChart3} label="本月毛利率" value={formatRate(profitReport?.summary?.monthMarginRate ?? 0)} detail="毛利 / 營收" tone="bg-cyan-50 text-cyan-700" />
+                </div>
+              </div>
             </div>
 
             <div className="grid gap-6 xl:grid-cols-2">
@@ -1789,7 +1818,7 @@ function App() {
                     <div key={`${item.rank}-${item.productName}`} className="flex items-center justify-between rounded-md border border-slate-200 p-3">
                       <div>
                         <p className="font-medium">{item.rank}. {item.productName}</p>
-                        <p className="text-sm text-slate-500">毛利率 {number.format(item.marginRate)}%</p>
+                        <p className="text-sm text-slate-500">毛利率 {formatRate(item.marginRate)}</p>
                       </div>
                       <div className="text-right">
                         <p className="font-semibold">{currency.format(item.profit)}</p>
