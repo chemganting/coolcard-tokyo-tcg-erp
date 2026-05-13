@@ -1159,6 +1159,20 @@ async function orderItemsByOrderId(client, orderId) {
   return rows;
 }
 
+async function salesByOrderId(client, orderId) {
+  const { rows } = await client.query(
+    `
+      SELECT id, product_id, user_id, order_id, quantity, sale_unit, cards_per_unit, unit_price::text, total::text, sold_at, voided_at, voided_by, created_at
+      FROM sales
+      WHERE order_id = $1
+      ORDER BY id
+      FOR UPDATE
+    `,
+    [orderId]
+  );
+  return rows;
+}
+
 async function recalculateAverageCost(client, productId) {
   const { rows } = await client.query(
     `
@@ -2558,7 +2572,7 @@ app.post("/api/orders", currentUser, async (request, response, next) => {
 
 async function updateOrderStatus(request, response, next) {
   const nextStatus = String(request.body.status ?? "").trim();
-  if (!["已完成", "已取消"].includes(nextStatus)) {
+  if (!["待出貨", "已完成", "已取消"].includes(nextStatus)) {
     return response.status(400).json({ message: "訂單狀態不合法" });
   }
 
@@ -2576,16 +2590,19 @@ async function updateOrderStatus(request, response, next) {
     }
 
     const beforeSnapshot = await orderById(client, beforeOrder.id);
-    if (beforeOrder.status !== "待出貨") {
-      await client.query("ROLLBACK");
-      return response.status(409).json({ message: "只有待出貨訂單可以調整狀態" });
-    }
     if (beforeOrder.status === nextStatus) {
       await client.query("ROLLBACK");
       return response.json(rowsToCamel([beforeSnapshot])[0]);
     }
 
     const items = await orderItemsByOrderId(client, beforeOrder.id);
+    const sales = await salesByOrderId(client, beforeOrder.id);
+    const salesByProduct = new Map();
+    for (const sale of sales) {
+      const list = salesByProduct.get(sale.product_id) ?? [];
+      list.push(sale);
+      salesByProduct.set(sale.product_id, list);
+    }
     const itemMap = new Map();
     for (const item of items) {
       itemMap.set(item.product_id, (itemMap.get(item.product_id) ?? 0) + Number(item.quantity));
@@ -2613,27 +2630,40 @@ async function updateOrderStatus(request, response, next) {
     for (const productId of productIds) {
       const product = productMap.get(productId);
       beforeProducts.push({ ...product });
-      if (nextStatus === "已完成" && product.stock < itemMap.get(productId)) {
-        await client.query("ROLLBACK");
-        return response.status(409).json({ message: `${product.name} 庫存不足，無法完成訂單` });
-      }
     }
 
     if (nextStatus === "已完成") {
       for (const productId of productIds) {
         const product = productMap.get(productId);
         const quantity = itemMap.get(productId);
-        const total = Number(product.price) * quantity;
-        await client.query(
-          `
-            INSERT INTO sales (product_id, user_id, order_id, quantity, sale_unit, cards_per_unit, unit_price, total, sold_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_DATE)
-            RETURNING id, product_id, user_id, order_id, quantity, sale_unit, cards_per_unit, unit_price::text, total::text, sold_at, voided_at, voided_by, created_at
-          `,
-          [productId, request.user.id, beforeOrder.id, quantity, product.unit, product.cards_per_unit, Number(product.price), total]
-        );
+        const productSales = salesByProduct.get(productId) ?? [];
+        const activeSales = productSales.filter((sale) => !sale.voided_at);
+        if (activeSales.length > 0) {
+          continue;
+        }
+        if (product.stock < quantity) {
+          await client.query("ROLLBACK");
+          return response.status(409).json({ message: `${product.name} 庫存不足，無法完成訂單` });
+        }
+
+        const saleToRestore = productSales.find((sale) => sale.voided_at);
+        if (saleToRestore) {
+          await client.query("UPDATE sales SET voided_at = NULL, voided_by = NULL WHERE id = $1", [saleToRestore.id]);
+        } else {
+          const total = Number(product.price) * quantity;
+          await client.query(
+            `
+              INSERT INTO sales (product_id, user_id, order_id, quantity, sale_unit, cards_per_unit, unit_price, total, sold_at)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_DATE)
+              RETURNING id
+            `,
+            [productId, request.user.id, beforeOrder.id, quantity, product.unit, product.cards_per_unit, Number(product.price), total]
+          );
+        }
+        const stockBefore = product.stock;
         await client.query("UPDATE products SET stock = stock - $1, updated_at = NOW() WHERE id = $2", [quantity, productId]);
         const afterProduct = await productById(client, productId);
+        productMap.set(productId, afterProduct);
         afterProducts.push(afterProduct);
         await writeInventoryLog(
           client,
@@ -2641,7 +2671,7 @@ async function updateOrderStatus(request, response, next) {
           productId,
           "sale_created",
           -quantity,
-          product.stock,
+          stockBefore,
           afterProduct.stock,
           "order",
           beforeOrder.id,
@@ -2649,8 +2679,35 @@ async function updateOrderStatus(request, response, next) {
         );
       }
       await writeInventoryLog(client, request, null, "order_completed", 0, 0, 0, "order", beforeOrder.id, "訂單已完成");
-    } else {
-      await writeInventoryLog(client, request, null, "order_cancelled", 0, 0, 0, "order", beforeOrder.id, "訂單已取消");
+    } else if (nextStatus === "已取消" || nextStatus === "待出貨") {
+      for (const productId of productIds) {
+        const product = productMap.get(productId);
+        const productSales = salesByProduct.get(productId) ?? [];
+        const activeSales = productSales.filter((sale) => !sale.voided_at);
+        for (const sale of activeSales) {
+          const stockBefore = productMap.get(productId).stock;
+          await client.query("UPDATE sales SET voided_at = NOW(), voided_by = $1 WHERE id = $2", [request.user.id, sale.id]);
+          await client.query("UPDATE products SET stock = stock + $1, updated_at = NOW() WHERE id = $2", [sale.quantity, productId]);
+          const afterProduct = await productById(client, productId);
+          productMap.set(productId, afterProduct);
+          afterProducts.push(afterProduct);
+          await writeInventoryLog(
+            client,
+            request,
+            productId,
+            "sale_void",
+            sale.quantity,
+            stockBefore,
+            afterProduct.stock,
+            "sale",
+            sale.id,
+            "訂單狀態調整補回庫存"
+          );
+        }
+      }
+      if (nextStatus === "已取消") {
+        await writeInventoryLog(client, request, null, "order_cancelled", 0, 0, 0, "order", beforeOrder.id, "訂單已取消");
+      }
     }
 
     await client.query("UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2", [nextStatus, beforeOrder.id]);
@@ -2661,7 +2718,11 @@ async function updateOrderStatus(request, response, next) {
       "update",
       "order",
       { order: beforeSnapshot, products: beforeProducts.length ? beforeProducts : undefined },
-      { order: afterOrder, statusMessage: nextStatus === "已完成" ? "訂單已完成" : "訂單已取消", products: afterProducts.length ? afterProducts : undefined }
+      {
+        order: afterOrder,
+        statusMessage: nextStatus === "已完成" ? "訂單已完成" : nextStatus === "已取消" ? "訂單已取消" : "訂單已回到待出貨",
+        products: afterProducts.length ? afterProducts : undefined
+      }
     );
     await client.query("COMMIT");
     response.json(rowsToCamel([afterOrder])[0]);

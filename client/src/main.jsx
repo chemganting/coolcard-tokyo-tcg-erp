@@ -742,6 +742,7 @@ function App() {
   const [mobileOrderTab, setMobileOrderTab] = useState("待處理");
   const [mobileDrawer, setMobileDrawer] = useState(null);
   const [shippingAssistantOrderId, setShippingAssistantOrderId] = useState(null);
+  const [saleStatusDrafts, setSaleStatusDrafts] = useState({});
   const productFormRef = useRef(null);
   const purchaseFormRef = useRef(null);
   const [error, setError] = useState("");
@@ -2925,7 +2926,7 @@ function App() {
               <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <h3 className="text-base font-semibold">訂單管理區</h3>
-                  <p className="mt-1 text-sm text-slate-500">左側直式區塊，依待出貨、已完成、已取消排列。</p>
+                  <p className="mt-1 text-sm text-slate-500">左側三欄橫向排列，依待出貨、已完成、已取消分類。</p>
                 </div>
                 <div className="grid gap-2 sm:grid-cols-[minmax(220px,1fr)_180px]">
                   <div className="relative min-w-0">
@@ -3032,7 +3033,7 @@ function App() {
                 ))}
               </div>
 
-              <div className="hidden gap-4 lg:grid">
+              <div className="hidden gap-4 lg:grid lg:grid-cols-3">
                 {[
                   { title: "待處理", orders: pendingOrders, empty: "尚無待出貨訂單", showActions: true },
                   { title: "已完成", orders: doneOrders.filter((order) => order.status === "已完成"), empty: "尚無已完成訂單", showActions: false },
@@ -3135,6 +3136,7 @@ function App() {
                     <th className="py-3 pr-4">數量</th>
                     <th className="py-3 pr-4">金額</th>
                     <th className="py-3 pr-4">狀態</th>
+                    <th className="py-3 pr-4">操作</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -3150,6 +3152,29 @@ function App() {
                         <span className={`rounded px-2 py-1 text-xs font-medium ${sale.orderId ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-700"}`}>
                           {sale.orderStatus || (sale.orderId ? "訂單成交" : "舊資料")}
                         </span>
+                      </td>
+                      <td className="py-3 pr-4 align-top">
+                        {sale.orderId ? (
+                          <div className="flex min-w-44 flex-col gap-2">
+                            <SelectInput
+                              value={saleStatusDrafts[sale.orderId] ?? sale.orderStatus ?? "待出貨"}
+                              onChange={(event) => setSaleStatusDrafts((current) => ({ ...current, [sale.orderId]: event.target.value }))}
+                            >
+                              {ORDER_STATUS_OPTIONS.map((status) => (
+                                <option key={status} value={status}>{status}</option>
+                              ))}
+                            </SelectInput>
+                            <Button
+                              type="button"
+                              className="h-10 w-full"
+                              onClick={() => updateOrderStatus(sale.orderId, saleStatusDrafts[sale.orderId] ?? sale.orderStatus ?? "待出貨")}
+                            >
+                              調整狀態
+                            </Button>
+                          </div>
+                        ) : (
+                          <span className="text-sm text-slate-400">-</span>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -3176,6 +3201,29 @@ function App() {
                   <div className="mt-3 grid grid-cols-2 gap-2 text-sm text-slate-600">
                     <p>數量 {sale.quantity}</p>
                     <p>{currency.format(sale.total)}</p>
+                  </div>
+                  <div className="mt-3 grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                    {sale.orderId ? (
+                      <>
+                        <SelectInput
+                          value={saleStatusDrafts[sale.orderId] ?? sale.orderStatus ?? "待出貨"}
+                          onChange={(event) => setSaleStatusDrafts((current) => ({ ...current, [sale.orderId]: event.target.value }))}
+                        >
+                          {ORDER_STATUS_OPTIONS.map((status) => (
+                            <option key={status} value={status}>{status}</option>
+                          ))}
+                        </SelectInput>
+                        <Button
+                          type="button"
+                          className="h-11 w-full"
+                          onClick={() => updateOrderStatus(sale.orderId, saleStatusDrafts[sale.orderId] ?? sale.orderStatus ?? "待出貨")}
+                        >
+                          調整狀態
+                        </Button>
+                      </>
+                    ) : (
+                      <p className="text-sm text-slate-400">此為舊資料，無法調整訂單狀態</p>
+                    )}
                   </div>
                 </article>
               ))}
