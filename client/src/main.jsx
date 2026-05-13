@@ -2921,12 +2921,12 @@ function App() {
             </div>
           </section>
 
-          <section id="訂單管理區" className="grid gap-6 lg:grid-cols-[minmax(0,1.5fr)_minmax(360px,1fr)]">
+          <section id="訂單管理區" className="space-y-6">
             <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
               <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <h3 className="text-base font-semibold">訂單管理區</h3>
-                  <p className="mt-1 text-sm text-slate-500">左側三欄橫向排列，依待出貨、已完成、已取消分類。</p>
+                  <p className="mt-1 text-sm text-slate-500">桌機版以三欄 Kanban 橫向佔滿主畫面。</p>
                 </div>
                 <div className="grid gap-2 sm:grid-cols-[minmax(220px,1fr)_180px]">
                   <div className="relative min-w-0">
@@ -3107,55 +3107,117 @@ function App() {
             </div>
           </section>
 
-          <section id="銷售管理" className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-            <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <h2 className="text-lg font-semibold text-slate-950">銷售紀錄</h2>
+          <section id="銷售管理" className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+            <button
+              type="button"
+              onClick={() => setSalesOpen((current) => !current)}
+              aria-expanded={salesOpen}
+              className="flex w-full items-center justify-between gap-3 px-4 py-4 text-left transition hover:bg-slate-50"
+            >
+              <div className="min-w-0">
+                <h2 className="truncate text-lg font-semibold text-slate-950">銷售紀錄</h2>
                 <p className="mt-1 text-sm text-slate-500">
                   總筆數 {number.format(filteredSales.length)} 筆 · 最近一筆銷售時間 {latestSaleTime}
                 </p>
               </div>
-              <div className="grid grid-cols-2 gap-2">
-                <TextInput type="date" value={dateRange.from} onChange={(e) => setDateRange({ ...dateRange, from: e.target.value })} />
-                <TextInput type="date" value={dateRange.to} onChange={(e) => setDateRange({ ...dateRange, to: e.target.value })} />
+              <div className="flex items-center gap-2 text-sm text-slate-500">
+                <span className="hidden sm:inline">{salesOpen ? "收合" : "展開"}</span>
+                <ChevronDown className={`h-5 w-5 transition ${salesOpen ? "rotate-180" : ""}`} />
               </div>
-            </div>
-            <div className="grid gap-2 rounded-lg bg-slate-50 px-4 py-3 text-sm text-slate-600 sm:grid-cols-3">
-              <div>總筆數：<span className="font-semibold text-slate-950">{number.format(filteredSales.length)}</span></div>
-              <div>已完成訂單成交：<span className="font-semibold text-slate-950">{number.format(filteredSales.filter((sale) => sale.orderId).length)}</span></div>
-              <div>手動成交舊資料：<span className="font-semibold text-slate-950">{number.format(filteredSales.filter((sale) => !sale.orderId).length)}</span></div>
-            </div>
-            <div className="hidden overflow-x-auto lg:block">
-              <table className="min-w-full table-auto text-left text-sm">
-                <thead className="border-b border-slate-200 text-xs text-slate-500">
-                  <tr>
-                    <th className="py-3 pr-4">日期</th>
-                    <th className="py-3 pr-4">訂單編號</th>
-                    <th className="py-3 pr-4">客戶名稱</th>
-                    <th className="py-3 pr-4">商品摘要</th>
-                    <th className="py-3 pr-4">數量</th>
-                    <th className="py-3 pr-4">金額</th>
-                    <th className="py-3 pr-4">狀態</th>
-                    <th className="py-3 pr-4">操作</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
+            </button>
+            {salesOpen && (
+              <div className="border-t border-slate-200 p-4">
+                <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="grid grid-cols-2 gap-2">
+                    <TextInput type="date" value={dateRange.from} onChange={(e) => setDateRange({ ...dateRange, from: e.target.value })} />
+                    <TextInput type="date" value={dateRange.to} onChange={(e) => setDateRange({ ...dateRange, to: e.target.value })} />
+                  </div>
+                  <div className="grid gap-2 rounded-lg bg-slate-50 px-4 py-3 text-sm text-slate-600 sm:grid-cols-3">
+                    <div>總筆數：<span className="font-semibold text-slate-950">{number.format(filteredSales.length)}</span></div>
+                    <div>已完成訂單成交：<span className="font-semibold text-slate-950">{number.format(filteredSales.filter((sale) => sale.orderId).length)}</span></div>
+                    <div>手動成交舊資料：<span className="font-semibold text-slate-950">{number.format(filteredSales.filter((sale) => !sale.orderId).length)}</span></div>
+                  </div>
+                </div>
+                <div className="hidden overflow-x-auto lg:block">
+                  <table className="min-w-full table-auto text-left text-sm">
+                    <thead className="border-b border-slate-200 text-xs text-slate-500">
+                      <tr>
+                        <th className="py-3 pr-4">日期</th>
+                        <th className="py-3 pr-4">訂單編號</th>
+                        <th className="py-3 pr-4">客戶名稱</th>
+                        <th className="py-3 pr-4">商品摘要</th>
+                        <th className="py-3 pr-4">數量</th>
+                        <th className="py-3 pr-4">金額</th>
+                        <th className="py-3 pr-4">狀態</th>
+                        <th className="py-3 pr-4">操作</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {visibleSales.map((sale) => (
+                        <tr key={sale.id}>
+                          <td className="py-3 pr-4">{sale.soldAt}</td>
+                          <td className="py-3 pr-4 font-medium">{sale.orderNumber || "手動成交"}</td>
+                          <td className="py-3 pr-4">{sale.customerName || "-"}</td>
+                          <td className="py-3 pr-4 font-medium">{sale.productName}<p className="text-xs text-slate-500">{sale.productSeries}</p></td>
+                          <td className="py-3 pr-4">{sale.quantity}</td>
+                          <td className="py-3 pr-4 font-semibold">{currency.format(sale.total)}</td>
+                          <td className="py-3 pr-4">
+                            <span className={`rounded px-2 py-1 text-xs font-medium ${sale.orderId ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-700"}`}>
+                              {sale.orderStatus || (sale.orderId ? "訂單成交" : "舊資料")}
+                            </span>
+                          </td>
+                          <td className="py-3 pr-4 align-top">
+                            {sale.orderId ? (
+                              <div className="flex min-w-44 flex-col gap-2">
+                                <SelectInput
+                                  value={saleStatusDrafts[sale.orderId] ?? sale.orderStatus ?? "待出貨"}
+                                  onChange={(event) => setSaleStatusDrafts((current) => ({ ...current, [sale.orderId]: event.target.value }))}
+                                >
+                                  {ORDER_STATUS_OPTIONS.map((status) => (
+                                    <option key={status} value={status}>{status}</option>
+                                  ))}
+                                </SelectInput>
+                                <Button
+                                  type="button"
+                                  className="h-10 w-full"
+                                  onClick={() => updateOrderStatus(sale.orderId, saleStatusDrafts[sale.orderId] ?? sale.orderStatus ?? "待出貨")}
+                                >
+                                  調整狀態
+                                </Button>
+                              </div>
+                            ) : (
+                              <span className="text-sm text-slate-400">-</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="grid gap-3 lg:hidden">
                   {visibleSales.map((sale) => (
-                    <tr key={sale.id}>
-                      <td className="py-3 pr-4">{sale.soldAt}</td>
-                      <td className="py-3 pr-4 font-medium">{sale.orderNumber || "手動成交"}</td>
-                      <td className="py-3 pr-4">{sale.customerName || "-"}</td>
-                      <td className="py-3 pr-4 font-medium">{sale.productName}<p className="text-xs text-slate-500">{sale.productSeries}</p></td>
-                      <td className="py-3 pr-4">{sale.quantity}</td>
-                      <td className="py-3 pr-4 font-semibold">{currency.format(sale.total)}</td>
-                      <td className="py-3 pr-4">
-                        <span className={`rounded px-2 py-1 text-xs font-medium ${sale.orderId ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-700"}`}>
-                          {sale.orderStatus || (sale.orderId ? "訂單成交" : "舊資料")}
-                        </span>
-                      </td>
-                      <td className="py-3 pr-4 align-top">
+                    <article key={sale.id} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="font-semibold">{sale.orderNumber || "手動成交"}</p>
+                          <p className="mt-1 text-sm text-slate-500">{sale.customerName || "-"}</p>
+                          <p className="mt-1 text-sm text-slate-500">{sale.productName} · {sale.productSeries}</p>
+                          <p className="mt-1 text-sm text-slate-500">{sale.soldAt}</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="font-semibold">{currency.format(sale.total)}</p>
+                          <span className={`mt-1 inline-flex rounded px-2 py-1 text-xs font-medium ${sale.orderId ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-700"}`}>
+                            {sale.orderStatus || (sale.orderId ? "訂單成交" : "舊資料")}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="mt-3 grid grid-cols-2 gap-2 text-sm text-slate-600">
+                        <p>數量 {sale.quantity}</p>
+                        <p>{currency.format(sale.total)}</p>
+                      </div>
+                      <div className="mt-3 grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
                         {sale.orderId ? (
-                          <div className="flex min-w-44 flex-col gap-2">
+                          <>
                             <SelectInput
                               value={saleStatusDrafts[sale.orderId] ?? sale.orderStatus ?? "待出貨"}
                               onChange={(event) => setSaleStatusDrafts((current) => ({ ...current, [sale.orderId]: event.target.value }))}
@@ -3166,74 +3228,27 @@ function App() {
                             </SelectInput>
                             <Button
                               type="button"
-                              className="h-10 w-full"
+                              className="h-11 w-full"
                               onClick={() => updateOrderStatus(sale.orderId, saleStatusDrafts[sale.orderId] ?? sale.orderStatus ?? "待出貨")}
                             >
                               調整狀態
                             </Button>
-                          </div>
+                          </>
                         ) : (
-                          <span className="text-sm text-slate-400">-</span>
+                          <p className="text-sm text-slate-400">此為舊資料，無法調整訂單狀態</p>
                         )}
-                      </td>
-                    </tr>
+                      </div>
+                    </article>
                   ))}
-                </tbody>
-              </table>
-            </div>
-            <div className="grid gap-3 lg:hidden">
-              {visibleSales.map((sale) => (
-                <article key={sale.id} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="font-semibold">{sale.orderNumber || "手動成交"}</p>
-                      <p className="mt-1 text-sm text-slate-500">{sale.customerName || "-"}</p>
-                      <p className="mt-1 text-sm text-slate-500">{sale.productName} · {sale.productSeries}</p>
-                      <p className="mt-1 text-sm text-slate-500">{sale.soldAt}</p>
-                    </div>
-                    <div className="text-right">
-                      <p className="font-semibold">{currency.format(sale.total)}</p>
-                      <span className={`mt-1 inline-flex rounded px-2 py-1 text-xs font-medium ${sale.orderId ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-700"}`}>
-                        {sale.orderStatus || (sale.orderId ? "訂單成交" : "舊資料")}
-                      </span>
-                    </div>
-                  </div>
-                  <div className="mt-3 grid grid-cols-2 gap-2 text-sm text-slate-600">
-                    <p>數量 {sale.quantity}</p>
-                    <p>{currency.format(sale.total)}</p>
-                  </div>
-                  <div className="mt-3 grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
-                    {sale.orderId ? (
-                      <>
-                        <SelectInput
-                          value={saleStatusDrafts[sale.orderId] ?? sale.orderStatus ?? "待出貨"}
-                          onChange={(event) => setSaleStatusDrafts((current) => ({ ...current, [sale.orderId]: event.target.value }))}
-                        >
-                          {ORDER_STATUS_OPTIONS.map((status) => (
-                            <option key={status} value={status}>{status}</option>
-                          ))}
-                        </SelectInput>
-                        <Button
-                          type="button"
-                          className="h-11 w-full"
-                          onClick={() => updateOrderStatus(sale.orderId, saleStatusDrafts[sale.orderId] ?? sale.orderStatus ?? "待出貨")}
-                        >
-                          調整狀態
-                        </Button>
-                      </>
-                    ) : (
-                      <p className="text-sm text-slate-400">此為舊資料，無法調整訂單狀態</p>
-                    )}
-                  </div>
-                </article>
-              ))}
-            </div>
-            <PaginationFooter
-              page={currentSalePage}
-              pageCount={salePageCount}
-              onPageChange={setSalePage}
-              summary={`每頁 ${LIST_PAGE_SIZE} 筆，目前顯示 ${number.format(visibleSales.length)} 筆，第 ${number.format(currentSalePage)} / ${number.format(salePageCount)} 頁`}
-            />
+                </div>
+                <PaginationFooter
+                  page={currentSalePage}
+                  pageCount={salePageCount}
+                  onPageChange={setSalePage}
+                  summary={`每頁 ${LIST_PAGE_SIZE} 筆，目前顯示 ${number.format(visibleSales.length)} 筆，第 ${number.format(currentSalePage)} / ${number.format(salePageCount)} 頁`}
+                />
+              </div>
+            )}
           </section>
 
           {isAdmin && (
