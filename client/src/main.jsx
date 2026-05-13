@@ -743,6 +743,7 @@ function App() {
   const [mobileDrawer, setMobileDrawer] = useState(null);
   const [shippingAssistantOrderId, setShippingAssistantOrderId] = useState(null);
   const [saleStatusDrafts, setSaleStatusDrafts] = useState({});
+  const [salesOpen, setSalesOpen] = useState(false);
   const productFormRef = useRef(null);
   const purchaseFormRef = useRef(null);
   const [error, setError] = useState("");
