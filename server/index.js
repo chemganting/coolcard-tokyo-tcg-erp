@@ -226,6 +226,10 @@ function reportSalesRows(rows) {
   ]);
 }
 
+function reportSalesHeaders() {
+  return ["日期", "訂單編號", "客戶名稱", "商品名稱", "數量", "營業額", "成本", "毛利", "毛利率", "店員"];
+}
+
 async function getProfitReport() {
   const [
     todaySummary,
@@ -386,14 +390,13 @@ async function googleSheetsClient() {
 }
 
 function sheetValues(report) {
-  const reportHeaders = ["日期", "訂單編號", "客戶名稱", "商品名稱", "數量", "營業額", "成本", "毛利", "毛利率", "店員"];
   return {
     "今日營收": [
-      reportHeaders,
+      reportSalesHeaders(),
       ...reportSalesRows(report.todayRevenueRows)
     ],
     [report.monthSheetTitle ?? reportMonthSheetTitle()]: [
-      reportHeaders,
+      reportSalesHeaders(),
       ...reportSalesRows(report.monthRevenueRows)
     ],
     "庫存總表": [
@@ -429,17 +432,48 @@ function sheetValues(report) {
 }
 
 async function ensureSheetTabs(sheets, spreadsheetId, sheetTitles = reportSheetTabs) {
-  const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
-  const existing = new Set(spreadsheet.data.sheets?.map((sheet) => sheet.properties?.title).filter(Boolean));
-  const requests = sheetTitles
-    .filter((title) => !existing.has(title))
-    .map((title) => ({ addSheet: { properties: { title } } }));
+  try {
+    const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
+    const existing = new Set(spreadsheet.data.sheets?.map((sheet) => sheet.properties?.title).filter(Boolean));
+    const requests = sheetTitles
+      .filter((title) => !existing.has(title))
+      .map((title) => ({ addSheet: { properties: { title } } }));
 
-  if (requests.length > 0) {
-    await sheets.spreadsheets.batchUpdate({
-      spreadsheetId,
-      requestBody: { requests }
-    });
+    if (requests.length > 0) {
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: { requests }
+      });
+    }
+  } catch (error) {
+    console.error("建立 Google Sheets 分頁失敗", error);
+    throw error;
+  }
+}
+
+async function ensureSheetTabWithHeader(sheets, spreadsheetId, title, headerRow) {
+  try {
+    const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
+    const existing = new Set(spreadsheet.data.sheets?.map((sheet) => sheet.properties?.title).filter(Boolean));
+    if (!existing.has(title)) {
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: {
+          requests: [{ addSheet: { properties: { title } } }]
+        }
+      });
+      if (headerRow?.length) {
+        await sheets.spreadsheets.values.update({
+          spreadsheetId,
+          range: `'${title}'!A1`,
+          valueInputOption: "USER_ENTERED",
+          requestBody: { values: [headerRow] }
+        });
+      }
+    }
+  } catch (error) {
+    console.error(`建立 Google Sheets 分頁 ${title} 失敗`, error);
+    throw error;
   }
 }
 
@@ -449,19 +483,26 @@ async function syncReportToGoogleSheets(report) {
 
   const sheets = await googleSheetsClient();
   const values = sheetValues(report);
+  const monthSheetTitle = report.monthSheetTitle ?? reportMonthSheetTitle();
+  await ensureSheetTabWithHeader(sheets, spreadsheetId, monthSheetTitle, reportSalesHeaders());
   await ensureSheetTabs(sheets, spreadsheetId, Object.keys(values));
 
   for (const [title, rows] of Object.entries(values)) {
-    await sheets.spreadsheets.values.clear({
-      spreadsheetId,
-      range: `'${title}'`
-    });
-    await sheets.spreadsheets.values.update({
-      spreadsheetId,
-      range: `'${title}'!A1`,
-      valueInputOption: "USER_ENTERED",
-      requestBody: { values: rows }
-    });
+    try {
+      await sheets.spreadsheets.values.clear({
+        spreadsheetId,
+        range: `'${title}'`
+      });
+      await sheets.spreadsheets.values.update({
+        spreadsheetId,
+        range: `'${title}'!A1`,
+        valueInputOption: "USER_ENTERED",
+        requestBody: { values: rows }
+      });
+    } catch (error) {
+      console.error(`寫入 Google Sheets 分頁 ${title} 失敗`, error);
+      throw error;
+    }
   }
 }
 
