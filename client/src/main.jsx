@@ -2965,6 +2965,7 @@ function App() {
                   ))}
                 </div>
 
+                <div className="h-[68vh] overflow-y-auto rounded-lg border border-slate-200 bg-slate-50 p-3">
                 {[
                   { key: "待處理", orders: pendingOrders, empty: "尚無待出貨訂單", allowActions: true },
                   { key: "已完成", orders: doneOrders.filter((order) => order.status === "已完成"), empty: "尚無已完成訂單", allowActions: false },
@@ -3032,20 +3033,23 @@ function App() {
                     {tab.orders.length === 0 && <p className="py-6 text-center text-slate-500">{tab.empty}</p>}
                   </div>
                 ))}
+                </div>
               </div>
 
-              <div className="hidden gap-4 lg:grid lg:grid-cols-3">
+              <div className="hidden lg:block">
+                <div className="grid h-[68vh] gap-4 lg:grid-cols-3">
                 {[
                   { title: "待處理", orders: pendingOrders, empty: "尚無待出貨訂單", showActions: true },
                   { title: "已完成", orders: doneOrders.filter((order) => order.status === "已完成"), empty: "尚無已完成訂單", showActions: false },
                   { title: "已取消", orders: doneOrders.filter((order) => order.status === "已取消"), empty: "尚無已取消訂單", showActions: false }
                 ].map((column) => (
-                  <section key={column.title} className="overflow-hidden rounded-lg border border-slate-200 bg-slate-50 shadow-sm">
+                  <section key={column.title} className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-slate-200 bg-slate-50 shadow-sm">
                     <div className="flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3">
                       <h4 className="text-sm font-semibold text-slate-700">{column.title} {number.format(column.orders.length)}</h4>
                       <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">{number.format(column.orders.length)} 筆</span>
                     </div>
-                    <div className="grid gap-3 p-4">
+                    <div className="min-h-0 flex-1 overflow-y-auto p-4">
+                      <div className="grid gap-3">
                       {column.orders.map((order) => (
                         <article key={order.id} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
                           <div className="flex items-start justify-between gap-3">
@@ -3101,9 +3105,11 @@ function App() {
                         </article>
                       ))}
                       {column.orders.length === 0 && <p className="py-6 text-center text-slate-500">{column.empty}</p>}
+                      </div>
                     </div>
                   </section>
                 ))}
+              </div>
               </div>
             </div>
           </section>
