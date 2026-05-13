@@ -2316,6 +2316,7 @@ app.get("/api/sales", currentUser, async (request, response, next) => {
           products.unit AS product_unit,
           products.cards_per_unit AS product_cards_per_unit,
           orders.status AS order_status,
+          orders.customer_name AS customer_name,
           users.name AS staff_name,
           users.role AS staff_role
         FROM sales
