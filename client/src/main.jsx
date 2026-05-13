@@ -205,6 +205,15 @@ function orderSummaryText(order) {
     .join("、") + (items.length > 2 ? ` 等 ${number.format(items.length)} 項商品` : "");
 }
 
+function orderShippingSummary(order) {
+  const data = parseShippingAssistantData(order);
+  return [
+    data.storeName ? `7-11 ${data.storeName}` : "",
+    data.storeNumber ? `店號 ${data.storeNumber}` : "",
+    data.note ? `備註 ${data.note}` : ""
+  ].filter(Boolean).join(" · ") || "尚無寄件資料";
+}
+
 function parseShippingAssistantData(order) {
   const shippingInfo = String(order?.shippingInfo ?? "").trim();
   const lines = shippingInfo
@@ -742,8 +751,10 @@ function App() {
   const [mobileOrderTab, setMobileOrderTab] = useState("待處理");
   const [mobileDrawer, setMobileDrawer] = useState(null);
   const [shippingAssistantOrderId, setShippingAssistantOrderId] = useState(null);
-  const [saleStatusDrafts, setSaleStatusDrafts] = useState({});
-  const [salesOpen, setSalesOpen] = useState(false);
+  const [orderStatusDrafts, setOrderStatusDrafts] = useState({});
+  const [pendingOrderPage, setPendingOrderPage] = useState(1);
+  const [completedOrderPage, setCompletedOrderPage] = useState(1);
+  const [cancelledOrderPage, setCancelledOrderPage] = useState(1);
   const productFormRef = useRef(null);
   const purchaseFormRef = useRef(null);
   const [error, setError] = useState("");
@@ -766,7 +777,6 @@ function App() {
   const [editingId, setEditingId] = useState(null);
   const [saleForm, setSaleForm] = useState({ productId: "", quantity: 1, saleUnit: "單張", cardsPerUnit: "1", unitPrice: "", soldAt: new Date().toISOString().slice(0, 10) });
   const [dateRange, setDateRange] = useState({ from: new Date().toISOString().slice(0, 10), to: new Date().toISOString().slice(0, 10) });
-  const [salePage, setSalePage] = useState(1);
   const productAutosaveReady = useRef(false);
   const employeeAutosaveReady = useRef(false);
 
@@ -777,7 +787,7 @@ function App() {
     [Boxes, "商品庫存"],
     [PackagePlus, "進貨管理"],
     [ShoppingCart, "快速下單"],
-    [ShoppingCart, "銷售管理"],
+    [ShoppingCart, "訂單管理"],
     [History, "操作紀錄"],
     ...(isAdmin ? [[UserRound, "員工管理"], [Database, "系統備份"]] : [])
   ]), [isAdmin]);
@@ -948,16 +958,6 @@ function App() {
     const start = (currentPurchasePage - 1) * LIST_PAGE_SIZE;
     return filteredPurchases.slice(start, start + LIST_PAGE_SIZE);
   }, [filteredPurchases, currentPurchasePage]);
-  const filteredSales = sales;
-  const salePageCount = Math.max(1, Math.ceil(filteredSales.length / LIST_PAGE_SIZE));
-  const currentSalePage = Math.min(salePage, salePageCount);
-  const visibleSales = useMemo(() => {
-    const start = (currentSalePage - 1) * LIST_PAGE_SIZE;
-    return filteredSales.slice(start, start + LIST_PAGE_SIZE);
-  }, [filteredSales, currentSalePage]);
-  const latestSaleTime = filteredSales[0]?.soldAt
-    ? new Date(filteredSales[0].soldAt).toLocaleDateString("zh-TW")
-    : "尚無銷售";
   const orderProducts = useMemo(() => {
     const keyword = orderProductSearch.trim().toLowerCase();
     return products.filter((product) => {
@@ -1001,11 +1001,11 @@ function App() {
   const filteredOrders = useMemo(() => {
     const keyword = orderCustomerSearch.trim().toLowerCase();
     return orders.filter((order) => {
-      const matchesKeyword = !keyword || [order.customerName, order.phone, order.lineName, order.orderNumber].filter(Boolean).some((value) => String(value).toLowerCase().includes(keyword));
-      const matchesStatus = orderStatusFilter === "全部" || order.status === orderStatusFilter;
-      return matchesKeyword && matchesStatus;
+      const itemNames = Array.isArray(order.items) ? order.items.map((item) => item.productName).filter(Boolean).join(" ") : "";
+      const matchesKeyword = !keyword || [order.customerName, order.phone, order.lineName, order.orderNumber, order.shippingInfo, itemNames].filter(Boolean).some((value) => String(value).toLowerCase().includes(keyword));
+      return matchesKeyword;
     });
-  }, [orderCustomerSearch, orderStatusFilter, orders]);
+  }, [orderCustomerSearch, orders]);
   const pendingOrders = useMemo(
     () => filteredOrders.filter((order) => ORDER_PENDING_STATUSES.has(order.status)),
     [filteredOrders]
@@ -1014,6 +1014,29 @@ function App() {
     () => filteredOrders.filter((order) => ORDER_DONE_STATUSES.has(order.status)),
     [filteredOrders]
   );
+  const cancelledOrders = useMemo(
+    () => filteredOrders.filter((order) => order.status === "已取消"),
+    [filteredOrders]
+  );
+  const pendingOrderPageCount = Math.max(1, Math.ceil(pendingOrders.length / LIST_PAGE_SIZE));
+  const completedOrderPageCount = Math.max(1, Math.ceil(doneOrders.filter((order) => order.status === "已完成").length / LIST_PAGE_SIZE));
+  const cancelledOrderPageCount = Math.max(1, Math.ceil(cancelledOrders.length / LIST_PAGE_SIZE));
+  const currentPendingOrderPage = Math.min(pendingOrderPage, pendingOrderPageCount);
+  const currentCompletedOrderPage = Math.min(completedOrderPage, completedOrderPageCount);
+  const currentCancelledOrderPage = Math.min(cancelledOrderPage, cancelledOrderPageCount);
+  const visiblePendingOrders = useMemo(() => {
+    const start = (currentPendingOrderPage - 1) * LIST_PAGE_SIZE;
+    return pendingOrders.slice(start, start + LIST_PAGE_SIZE);
+  }, [pendingOrders, currentPendingOrderPage]);
+  const visibleCompletedOrders = useMemo(() => {
+    const completedOrders = doneOrders.filter((order) => order.status === "已完成");
+    const start = (currentCompletedOrderPage - 1) * LIST_PAGE_SIZE;
+    return completedOrders.slice(start, start + LIST_PAGE_SIZE);
+  }, [doneOrders, currentCompletedOrderPage]);
+  const visibleCancelledOrders = useMemo(() => {
+    const start = (currentCancelledOrderPage - 1) * LIST_PAGE_SIZE;
+    return cancelledOrders.slice(start, start + LIST_PAGE_SIZE);
+  }, [cancelledOrders, currentCancelledOrderPage]);
 
   useEffect(() => {
     setProductPage(1);
@@ -1024,10 +1047,6 @@ function App() {
   }, [purchaseFilters.from, purchaseFilters.to, purchaseFilters.supplier, purchaseFilters.product, purchaseFilters.paymentStatus]);
 
   useEffect(() => {
-    setSalePage(1);
-  }, [dateRange.from, dateRange.to]);
-
-  useEffect(() => {
     if (productPage > productPageCount) setProductPage(productPageCount);
   }, [productPage, productPageCount]);
 
@@ -1036,8 +1055,16 @@ function App() {
   }, [purchasePage, purchasePageCount]);
 
   useEffect(() => {
-    if (salePage > salePageCount) setSalePage(salePageCount);
-  }, [salePage, salePageCount]);
+    if (pendingOrderPage > pendingOrderPageCount) setPendingOrderPage(pendingOrderPageCount);
+  }, [pendingOrderPage, pendingOrderPageCount]);
+
+  useEffect(() => {
+    if (completedOrderPage > completedOrderPageCount) setCompletedOrderPage(completedOrderPageCount);
+  }, [completedOrderPage, completedOrderPageCount]);
+
+  useEffect(() => {
+    if (cancelledOrderPage > cancelledOrderPageCount) setCancelledOrderPage(cancelledOrderPageCount);
+  }, [cancelledOrderPage, cancelledOrderPageCount]);
 
   useEffect(() => {
     if (!editingId) return undefined;
@@ -2922,7 +2949,7 @@ function App() {
             </div>
           </section>
 
-          <section id="訂單管理區" className="space-y-6">
+          <section id="訂單管理區" className="hidden">
             <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
               <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
@@ -3114,148 +3141,213 @@ function App() {
             </div>
           </section>
 
-          <section id="銷售管理" className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-            <button
-              type="button"
-              onClick={() => setSalesOpen((current) => !current)}
-              aria-expanded={salesOpen}
-              className="flex w-full items-center justify-between gap-3 px-4 py-4 text-left transition hover:bg-slate-50"
-            >
-              <div className="min-w-0">
-                <h2 className="truncate text-lg font-semibold text-slate-950">銷售紀錄</h2>
+          <section id="訂單管理" className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-950">訂單管理</h2>
                 <p className="mt-1 text-sm text-slate-500">
-                  總筆數 {number.format(filteredSales.length)} 筆 · 最近一筆銷售時間 {latestSaleTime}
+                  以狀態分成待處理、已完成、已取消三區顯示，使用橫列表格管理訂單。
                 </p>
               </div>
-              <div className="flex items-center gap-2 text-sm text-slate-500">
-                <span className="hidden sm:inline">{salesOpen ? "收合" : "展開"}</span>
-                <ChevronDown className={`h-5 w-5 transition ${salesOpen ? "rotate-180" : ""}`} />
+              <div className="grid gap-2 sm:min-w-[320px]">
+                <div className="relative min-w-0">
+                  <Search className="pointer-events-none absolute left-3 top-2.5 h-5 w-5 text-slate-400" />
+                  <input
+                    value={orderCustomerSearch}
+                    onChange={(event) => setOrderCustomerSearch(event.target.value)}
+                    placeholder="搜尋訂單編號 / 客戶 / LINE / 電話 / 商品"
+                    className="h-12 w-full rounded-md border border-slate-300 bg-white pl-10 pr-3 text-base outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-100 sm:h-10 sm:text-sm"
+                  />
+                </div>
               </div>
-            </button>
-            {salesOpen && (
-              <div className="border-t border-slate-200 p-4">
-                <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="grid grid-cols-2 gap-2">
-                    <TextInput type="date" value={dateRange.from} onChange={(e) => setDateRange({ ...dateRange, from: e.target.value })} />
-                    <TextInput type="date" value={dateRange.to} onChange={(e) => setDateRange({ ...dateRange, to: e.target.value })} />
-                  </div>
-                  <div className="grid gap-2 rounded-lg bg-slate-50 px-4 py-3 text-sm text-slate-600 sm:grid-cols-3">
-                    <div>總筆數：<span className="font-semibold text-slate-950">{number.format(filteredSales.length)}</span></div>
-                    <div>已完成訂單成交：<span className="font-semibold text-slate-950">{number.format(filteredSales.filter((sale) => sale.orderId).length)}</span></div>
-                    <div>手動成交舊資料：<span className="font-semibold text-slate-950">{number.format(filteredSales.filter((sale) => !sale.orderId).length)}</span></div>
-                  </div>
-                </div>
-                <div className="hidden overflow-x-auto lg:block">
-                  <table className="min-w-full table-auto text-left text-sm">
-                    <thead className="border-b border-slate-200 text-xs text-slate-500">
-                      <tr>
-                        <th className="py-3 pr-4">日期</th>
-                        <th className="py-3 pr-4">訂單編號</th>
-                        <th className="py-3 pr-4">客戶名稱</th>
-                        <th className="py-3 pr-4">商品摘要</th>
-                        <th className="py-3 pr-4">數量</th>
-                        <th className="py-3 pr-4">金額</th>
-                        <th className="py-3 pr-4">狀態</th>
-                        <th className="py-3 pr-4">操作</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {visibleSales.map((sale) => (
-                        <tr key={sale.id}>
-                          <td className="py-3 pr-4">{sale.soldAt}</td>
-                          <td className="py-3 pr-4 font-medium">{sale.orderNumber || "手動成交"}</td>
-                          <td className="py-3 pr-4">{sale.customerName || "-"}</td>
-                          <td className="py-3 pr-4 font-medium">{sale.productName}<p className="text-xs text-slate-500">{sale.productSeries}</p></td>
-                          <td className="py-3 pr-4">{sale.quantity}</td>
-                          <td className="py-3 pr-4 font-semibold">{currency.format(sale.total)}</td>
-                          <td className="py-3 pr-4">
-                            <span className={`rounded px-2 py-1 text-xs font-medium ${sale.orderId ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-700"}`}>
-                              {sale.orderStatus || (sale.orderId ? "訂單成交" : "舊資料")}
-                            </span>
-                          </td>
-                          <td className="py-3 pr-4 align-top">
-                            {sale.orderId ? (
-                              <div className="flex min-w-44 flex-col gap-2">
-                                <SelectInput
-                                  value={saleStatusDrafts[sale.orderId] ?? sale.orderStatus ?? "待出貨"}
-                                  onChange={(event) => setSaleStatusDrafts((current) => ({ ...current, [sale.orderId]: event.target.value }))}
-                                >
-                                  {ORDER_STATUS_OPTIONS.map((status) => (
-                                    <option key={status} value={status}>{status}</option>
-                                  ))}
-                                </SelectInput>
-                                <Button
-                                  type="button"
-                                  className="h-10 w-full"
-                                  onClick={() => updateOrderStatus(sale.orderId, saleStatusDrafts[sale.orderId] ?? sale.orderStatus ?? "待出貨")}
-                                >
-                                  調整狀態
-                                </Button>
-                              </div>
-                            ) : (
-                              <span className="text-sm text-slate-400">-</span>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <div className="grid gap-3 lg:hidden">
-                  {visibleSales.map((sale) => (
-                    <article key={sale.id} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="font-semibold">{sale.orderNumber || "手動成交"}</p>
-                          <p className="mt-1 text-sm text-slate-500">{sale.customerName || "-"}</p>
-                          <p className="mt-1 text-sm text-slate-500">{sale.productName} · {sale.productSeries}</p>
-                          <p className="mt-1 text-sm text-slate-500">{sale.soldAt}</p>
+            </div>
+
+            <div className="grid gap-4 lg:hidden">
+              <div className="grid grid-cols-3 gap-2 rounded-lg bg-slate-100 p-1 text-sm font-medium">
+                {[
+                  { key: "待處理", count: pendingOrders.length },
+                  { key: "已完成", count: doneOrders.filter((order) => order.status === "已完成").length },
+                  { key: "已取消", count: cancelledOrders.length }
+                ].map((tab) => (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    onClick={() => setMobileOrderTab(tab.key)}
+                    className={`rounded-md px-3 py-2 transition ${mobileOrderTab === tab.key ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"}`}
+                  >
+                    {tab.key}
+                    <span className="ml-2 text-xs text-slate-500">{number.format(tab.count)}</span>
+                  </button>
+                ))}
+              </div>
+
+              <div className="h-[68vh] overflow-y-auto rounded-lg border border-slate-200 bg-slate-50 p-3">
+                {(mobileOrderTab === "待處理" ? visiblePendingOrders : mobileOrderTab === "已完成" ? visibleCompletedOrders : visibleCancelledOrders).length === 0 ? (
+                  <p className="py-6 text-center text-slate-500">
+                    {mobileOrderTab === "待處理" ? "尚無待出貨訂單" : mobileOrderTab === "已完成" ? "尚無已完成訂單" : "尚無已取消訂單"}
+                  </p>
+                ) : (
+                  <div className="grid gap-3">
+                    {(mobileOrderTab === "待處理" ? visiblePendingOrders : mobileOrderTab === "已完成" ? visibleCompletedOrders : visibleCancelledOrders).map((order) => (
+                      <article key={order.id} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="font-semibold text-slate-950">{order.customerName || "-"}</p>
+                            <p className="mt-1 text-sm text-slate-500">{order.orderNumber}</p>
+                            <p className="mt-1 text-sm text-slate-500">{order.lineName || "-"} · {order.phone || "-"}</p>
+                          </div>
+                          <span className={`rounded px-2 py-1 text-xs font-medium ${orderStatusTone(order.status)}`}>{orderStatusLabel(order.status)}</span>
                         </div>
-                        <div className="text-right">
-                          <p className="font-semibold">{currency.format(sale.total)}</p>
-                          <span className={`mt-1 inline-flex rounded px-2 py-1 text-xs font-medium ${sale.orderId ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-700"}`}>
-                            {sale.orderStatus || (sale.orderId ? "訂單成交" : "舊資料")}
-                          </span>
+                        <div className="mt-3 grid gap-2 text-sm text-slate-600">
+                          <p>商品摘要 {orderSummaryText(order)}</p>
+                          <p>金額 {currency.format(order.totalAmount)}</p>
+                          <p>寄件資料 {orderShippingSummary(order)}</p>
+                          <p>建立時間 {new Date(order.createdAt).toLocaleString("zh-TW")}</p>
                         </div>
-                      </div>
-                      <div className="mt-3 grid grid-cols-2 gap-2 text-sm text-slate-600">
-                        <p>數量 {sale.quantity}</p>
-                        <p>{currency.format(sale.total)}</p>
-                      </div>
-                      <div className="mt-3 grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
-                        {sale.orderId ? (
-                          <>
-                            <SelectInput
-                              value={saleStatusDrafts[sale.orderId] ?? sale.orderStatus ?? "待出貨"}
-                              onChange={(event) => setSaleStatusDrafts((current) => ({ ...current, [sale.orderId]: event.target.value }))}
-                            >
-                              {ORDER_STATUS_OPTIONS.map((status) => (
-                                <option key={status} value={status}>{status}</option>
-                              ))}
-                            </SelectInput>
-                            <Button
-                              type="button"
-                              className="h-11 w-full"
-                              onClick={() => updateOrderStatus(sale.orderId, saleStatusDrafts[sale.orderId] ?? sale.orderStatus ?? "待出貨")}
-                            >
+                        <div className="mt-3 grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                          <SelectInput
+                            value={orderStatusDrafts[order.id] ?? order.status ?? "待出貨"}
+                            onChange={(event) => setOrderStatusDrafts((current) => ({ ...current, [order.id]: event.target.value }))}
+                          >
+                            {ORDER_STATUS_OPTIONS.map((status) => (
+                              <option key={status} value={status}>{status}</option>
+                            ))}
+                          </SelectInput>
+                          <div className="grid grid-cols-2 gap-2">
+                            <Button type="button" className="h-11 w-full" onClick={() => updateOrderStatus(order.id, orderStatusDrafts[order.id] ?? order.status ?? "待出貨")}>
                               調整狀態
                             </Button>
-                          </>
-                        ) : (
-                          <p className="text-sm text-slate-400">此為舊資料，無法調整訂單狀態</p>
-                        )}
-                      </div>
-                    </article>
-                  ))}
-                </div>
-                <PaginationFooter
-                  page={currentSalePage}
-                  pageCount={salePageCount}
-                  onPageChange={setSalePage}
-                  summary={`每頁 ${LIST_PAGE_SIZE} 筆，目前顯示 ${number.format(visibleSales.length)} 筆，第 ${number.format(currentSalePage)} / ${number.format(salePageCount)} 頁`}
-                />
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              className="h-11 w-full"
+                              onClick={() => setShippingAssistantOrderId((current) => (current === order.id ? null : order.id))}
+                            >
+                              寄件助手
+                            </Button>
+                          </div>
+                          {shippingAssistantOrderId === order.id && (
+                            <ShippingAssistantPanel
+                              order={order}
+                              onCopyText={copyShippingText}
+                              onOpen711={open711Delivery}
+                            />
+                          )}
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                )}
               </div>
-            )}
+            </div>
+
+            <div className="hidden gap-4 lg:grid">
+              {[
+                { title: "待處理", orders: visiblePendingOrders, allOrders: pendingOrders, page: currentPendingOrderPage, pageCount: pendingOrderPageCount, onPageChange: setPendingOrderPage, empty: "尚無待出貨訂單" },
+                { title: "已完成", orders: visibleCompletedOrders, allOrders: doneOrders.filter((order) => order.status === "已完成"), page: currentCompletedOrderPage, pageCount: completedOrderPageCount, onPageChange: setCompletedOrderPage, empty: "尚無已完成訂單" },
+                { title: "已取消", orders: visibleCancelledOrders, allOrders: cancelledOrders, page: currentCancelledOrderPage, pageCount: cancelledOrderPageCount, onPageChange: setCancelledOrderPage, empty: "尚無已取消訂單" }
+              ].map((block) => (
+                <section key={block.title} className="overflow-hidden rounded-lg border border-slate-200 bg-slate-50 shadow-sm">
+                  <div className="flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3">
+                    <div className="min-w-0">
+                      <h3 className="text-sm font-semibold text-slate-700">{block.title}（{number.format(block.allOrders.length)}）</h3>
+                    </div>
+                    <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">{number.format(block.allOrders.length)} 筆</span>
+                  </div>
+                  <div className="max-h-[22rem] overflow-auto p-4">
+                    {block.orders.length === 0 ? (
+                      <p className="py-6 text-center text-slate-500">{block.empty}</p>
+                    ) : (
+                      <table className="min-w-full table-auto text-left text-sm">
+                        <thead className="border-b border-slate-200 text-xs text-slate-500">
+                          <tr>
+                            <th className="py-3 pr-4">日期</th>
+                            <th className="py-3 pr-4">訂單編號</th>
+                            <th className="py-3 pr-4">客戶名稱</th>
+                            <th className="py-3 pr-4">LINE 名稱</th>
+                            <th className="py-3 pr-4">電話</th>
+                            <th className="py-3 pr-4">商品摘要</th>
+                            <th className="py-3 pr-4">數量</th>
+                            <th className="py-3 pr-4">金額</th>
+                            <th className="py-3 pr-4">訂單狀態</th>
+                            <th className="py-3 pr-4">寄件資料</th>
+                            <th className="py-3 pr-4">操作</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {block.orders.map((order) => (
+                            <React.Fragment key={order.id}>
+                              <tr>
+                                <td className="py-3 pr-4 whitespace-nowrap">{new Date(order.createdAt).toLocaleDateString("zh-TW")}</td>
+                                <td className="py-3 pr-4 font-medium whitespace-nowrap">{order.orderNumber}</td>
+                                <td className="py-3 pr-4 whitespace-nowrap">{order.customerName || "-"}</td>
+                                <td className="py-3 pr-4 whitespace-nowrap">{order.lineName || "-"}</td>
+                                <td className="py-3 pr-4 whitespace-nowrap">{order.phone || "-"}</td>
+                                <td className="py-3 pr-4 font-medium">{orderSummaryText(order)}</td>
+                                <td className="py-3 pr-4 whitespace-nowrap">{number.format(order.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0))}</td>
+                                <td className="py-3 pr-4 font-semibold whitespace-nowrap">{currency.format(order.totalAmount)}</td>
+                                <td className="py-3 pr-4">
+                                  <span className={`rounded px-2 py-1 text-xs font-medium ${orderStatusTone(order.status)}`}>
+                                    {orderStatusLabel(order.status)}
+                                  </span>
+                                </td>
+                                <td className="py-3 pr-4">
+                                  <div className="max-w-[18rem] truncate text-slate-600" title={buildShippingAssistantText(order)}>
+                                    {orderShippingSummary(order)}
+                                  </div>
+                                </td>
+                                <td className="py-3 pr-4 align-top">
+                                  <div className="grid min-w-44 gap-2">
+                                    <SelectInput
+                                      value={orderStatusDrafts[order.id] ?? order.status ?? "待出貨"}
+                                      onChange={(event) => setOrderStatusDrafts((current) => ({ ...current, [order.id]: event.target.value }))}
+                                    >
+                                      {ORDER_STATUS_OPTIONS.map((status) => (
+                                        <option key={status} value={status}>{status}</option>
+                                      ))}
+                                    </SelectInput>
+                                    <div className="grid gap-2">
+                                      <Button type="button" className="h-10 w-full" onClick={() => updateOrderStatus(order.id, orderStatusDrafts[order.id] ?? order.status ?? "待出貨")}>
+                                        調整狀態
+                                      </Button>
+                                      <Button
+                                        type="button"
+                                        variant="secondary"
+                                        className="h-10 w-full"
+                                        onClick={() => setShippingAssistantOrderId((current) => (current === order.id ? null : order.id))}
+                                      >
+                                        寄件助手
+                                      </Button>
+                                    </div>
+                                  </div>
+                                </td>
+                              </tr>
+                              {shippingAssistantOrderId === order.id && (
+                                <tr>
+                                  <td colSpan={11} className="bg-slate-50 px-4 pb-4">
+                                    <ShippingAssistantPanel
+                                      order={order}
+                                      onCopyText={copyShippingText}
+                                      onOpen711={open711Delivery}
+                                    />
+                                  </td>
+                                </tr>
+                              )}
+                            </React.Fragment>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                  <PaginationFooter
+                    page={block.page}
+                    pageCount={block.pageCount}
+                    onPageChange={block.onPageChange}
+                    summary={`每頁 ${LIST_PAGE_SIZE} 筆，目前顯示 ${number.format(block.orders.length)} 筆，第 ${number.format(block.page)} / ${number.format(block.pageCount)} 頁`}
+                  />
+                </section>
+              ))}
+            </div>
           </section>
 
           {isAdmin && (
@@ -3995,9 +4087,9 @@ function App() {
                   <PackagePlus className="h-4 w-4" />
                   進貨管理
                 </Button>
-                <Button type="button" variant="secondary" className="h-14 flex-col px-2 text-[11px]" onClick={() => scrollToSection("銷售管理")}>
+                <Button type="button" variant="secondary" className="h-14 flex-col px-2 text-[11px]" onClick={() => scrollToSection("訂單管理")}>
                   <History className="h-4 w-4" />
-                  銷售紀錄
+                  訂單管理
                 </Button>
               </div>
               <div className="grid grid-cols-3 gap-2">
