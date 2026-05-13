@@ -544,6 +544,96 @@ function ShippingAssistantPanel({ order, onCopyText, onOpen711 }) {
   );
 }
 
+function orderItemSummary(order) {
+  const items = Array.isArray(order?.items) ? order.items : [];
+  if (items.length === 0) return "無商品";
+  const summary = items.slice(0, 2).map((item) => `${item.productName} x${item.quantity}`).join("、");
+  return items.length > 2 ? `${summary} 等 ${number.format(items.length)} 項商品` : summary;
+}
+
+function RecentOrderCard({ order, expanded, onToggle }) {
+  const itemCount = Array.isArray(order.items) ? order.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0) : 0;
+  return (
+    <article className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+      <button
+        type="button"
+        onClick={() => onToggle(order.id)}
+        className="flex w-full items-start justify-between gap-3 px-4 py-4 text-left transition hover:bg-slate-50"
+      >
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="truncate font-semibold text-slate-950">{order.customerName || "-"}</p>
+            <span className={`rounded px-2 py-1 text-[11px] font-medium ${orderStatusTone(order.status)}`}>
+              {orderStatusLabel(order.status)}
+            </span>
+          </div>
+          <p className="mt-1 text-sm text-slate-500">{order.lineName || "-"} · {order.orderNumber}</p>
+          <p className="mt-1 line-clamp-2 text-sm text-slate-500">{orderItemSummary(order)}</p>
+        </div>
+        <div className="shrink-0 text-right">
+          <p className="font-semibold text-slate-950">{currency.format(order.totalAmount)}</p>
+          <p className="mt-1 text-xs text-slate-500">{new Date(order.createdAt).toLocaleString("zh-TW")}</p>
+          <ChevronDown className={`ml-auto mt-2 h-4 w-4 text-slate-500 transition-transform duration-300 ${expanded ? "rotate-180" : ""}`} />
+        </div>
+      </button>
+      <div
+        className="overflow-hidden border-t border-slate-200 transition-[max-height,opacity] duration-300 ease-out"
+        style={{ maxHeight: expanded ? "1000px" : "0px", opacity: expanded ? 1 : 0 }}
+        aria-hidden={!expanded}
+      >
+        <div className="grid gap-4 px-4 py-4 text-sm text-slate-600">
+          <div className="grid gap-2 sm:grid-cols-2">
+            <div className="rounded-lg bg-slate-50 p-3">
+              <p className="text-xs font-medium text-slate-500">訂單編號</p>
+              <p className="mt-1 font-semibold text-slate-950">{order.orderNumber}</p>
+            </div>
+            <div className="rounded-lg bg-slate-50 p-3">
+              <p className="text-xs font-medium text-slate-500">LINE 名稱</p>
+              <p className="mt-1 font-semibold text-slate-950">{order.lineName || "-"}</p>
+            </div>
+            <div className="rounded-lg bg-slate-50 p-3">
+              <p className="text-xs font-medium text-slate-500">電話</p>
+              <p className="mt-1 font-semibold text-slate-950">{order.phone || "-"}</p>
+            </div>
+            <div className="rounded-lg bg-slate-50 p-3">
+              <p className="text-xs font-medium text-slate-500">建立時間</p>
+              <p className="mt-1 font-semibold text-slate-950">{new Date(order.createdAt).toLocaleString("zh-TW")}</p>
+            </div>
+          </div>
+          <div className="rounded-lg bg-slate-50 p-3">
+            <p className="text-xs font-medium text-slate-500">7-11 門市資訊</p>
+            <p className="mt-1 whitespace-pre-line font-semibold text-slate-950">{order.shippingInfo || "-"}</p>
+          </div>
+          <div className="rounded-lg bg-slate-50 p-3">
+            <p className="text-xs font-medium text-slate-500">商品明細</p>
+            <div className="mt-2 grid gap-2">
+              {(order.items ?? []).map((item) => (
+                <div key={item.id} className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="font-medium text-slate-950">{item.productName}</p>
+                    <p className="mt-1 text-xs text-slate-500">{item.productSeries || "-"} · x{item.quantity}</p>
+                  </div>
+                  <p className="shrink-0 font-semibold text-slate-950">{currency.format(item.subtotal)}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <div className="rounded-lg bg-slate-50 p-3">
+              <p className="text-xs font-medium text-slate-500">商品數量</p>
+              <p className="mt-1 font-semibold text-slate-950">{number.format(itemCount)} 件</p>
+            </div>
+            <div className="rounded-lg bg-slate-50 p-3">
+              <p className="text-xs font-medium text-slate-500">訂單金額</p>
+              <p className="mt-1 font-semibold text-slate-950">{currency.format(order.totalAmount)}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </article>
+  );
+}
+
 function StatCard({ icon: Icon, label, value, detail, tone }) {
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
@@ -731,6 +821,9 @@ function App() {
   const [orderCustomerSearch, setOrderCustomerSearch] = useState("");
   const [orderStatusFilter, setOrderStatusFilter] = useState("全部");
   const [mobileOrderTab, setMobileOrderTab] = useState("待處理");
+  const [quickOrderMobileTab, setQuickOrderMobileTab] = useState("建立訂單");
+  const [recentOrderSearch, setRecentOrderSearch] = useState("");
+  const [expandedRecentOrderId, setExpandedRecentOrderId] = useState(null);
   const [mobileDrawer, setMobileDrawer] = useState(null);
   const [shippingAssistantOrderId, setShippingAssistantOrderId] = useState(null);
   const [saleOpen, setSaleOpen] = useState(false);
@@ -996,6 +1089,23 @@ function App() {
       return matchesKeyword && matchesStatus;
     });
   }, [orderCustomerSearch, orderStatusFilter, orders]);
+  const quickOrderRecentKeyword = useMemo(() => {
+    return [recentOrderSearch, orderForm.customerName, orderForm.lineName]
+      .map((value) => String(value ?? "").trim())
+      .filter(Boolean);
+  }, [recentOrderSearch, orderForm.customerName, orderForm.lineName]);
+  const recentOrdersFiltered = useMemo(() => {
+    const keywordParts = quickOrderRecentKeyword.map((value) => value.toLowerCase());
+    return orders.filter((order) => {
+      if (keywordParts.length === 0) return true;
+      const searchable = [order.customerName, order.lineName, order.orderNumber]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return keywordParts.every((part) => searchable.includes(part));
+    });
+  }, [orders, quickOrderRecentKeyword]);
+  const recentOrders = useMemo(() => recentOrdersFiltered.slice(0, 10), [recentOrdersFiltered]);
   const pendingOrders = useMemo(
     () => filteredOrders.filter((order) => ORDER_PENDING_STATUSES.has(order.status)),
     [filteredOrders]
@@ -2616,294 +2726,372 @@ function App() {
               <h2 className="text-lg font-semibold">快速下單</h2>
             </div>
 
-            <div className="grid gap-4 lg:hidden">
-              <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-                <div className="mb-4 flex items-center justify-between gap-3">
-                  <div>
-                    <h3 className="text-base font-semibold">商品面板</h3>
-                    <p className="mt-1 text-sm text-slate-500">先選商品，再加入訂單。</p>
-                  </div>
-                  <p className="text-sm font-semibold text-slate-700">{number.format(orderProducts.length)} 筆</p>
-                </div>
-                <div className="relative min-w-0">
-                  <Search className="pointer-events-none absolute left-3 top-2.5 h-5 w-5 text-slate-400" />
-                  <input
-                    value={orderProductSearch}
-                    onChange={(event) => setOrderProductSearch(event.target.value)}
-                    placeholder="搜尋商品名稱、系列、Grade"
-                    className="h-12 w-full rounded-md border border-slate-300 bg-white pl-10 pr-3 text-base outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-100"
-                  />
-                </div>
-                <div className="mt-4 grid grid-cols-2 gap-3">
-                  {orderProducts.map((product) => {
-                    const isSelected = selectedOrderProductId === product.id;
-                    return (
-                      <button
-                        key={product.id}
-                        type="button"
-                        onClick={() => openMobileOrderProductDrawer(product)}
-                        className={`rounded-lg border p-3 text-left shadow-sm transition active:scale-[0.99] ${isSelected ? "border-teal-300 bg-teal-50" : "border-slate-200 bg-white hover:border-teal-300 hover:bg-teal-50"}`}
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0">
-                            <p className="truncate font-medium text-slate-950">{product.name}</p>
-                            <p className="mt-1 text-sm text-slate-500">{product.series}</p>
-                          </div>
-                          {product.productType === "graded" && <span className="rounded bg-indigo-50 px-2 py-1 text-[11px] font-medium text-indigo-700">{productBadgeLabel(product)}</span>}
-                        </div>
-                        <div className="mt-2 flex items-center justify-between text-sm">
-                          <span className="font-semibold text-slate-950">{currency.format(product.price)}</span>
-                          <span className={`rounded px-2 py-1 text-xs font-medium ${product.stock <= product.lowStockThreshold ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-700"}`}>
-                            {formatStock(product)}
-                          </span>
-                        </div>
-                      </button>
-                    );
-                  })}
-                  {orderProducts.length === 0 && <p className="py-6 text-center text-slate-500 col-span-2">沒有可選商品</p>}
-                </div>
-              </div>
-
-              <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-                <div className="mb-4 flex items-center justify-between gap-3">
-                  <div>
-                    <h3 className="text-base font-semibold">訂單資訊</h3>
-                    <p className="mt-1 text-sm text-slate-500">加入商品後填寫客戶資料並建立訂單。</p>
-                  </div>
-                  <p className="font-semibold">{currency.format(orderTotal)}</p>
-                </div>
-                {orderItems.length === 0 ? (
-                  <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
-                    先從上方加入商品
-                  </div>
-                ) : (
-                  <div className="grid gap-4">
-                    <div className="grid gap-3">
-                      <label className="grid gap-1 text-sm font-medium text-slate-600">
-                        客戶名稱
-                        <TextInput value={orderForm.customerName} onChange={(e) => setOrderForm({ ...orderForm, customerName: e.target.value })} placeholder="客戶姓名" />
-                      </label>
-                      <label className="grid gap-1 text-sm font-medium text-slate-600">
-                        電話
-                        <TextInput value={orderForm.phone} onChange={(e) => setOrderForm({ ...orderForm, phone: e.target.value })} placeholder="聯絡電話" />
-                      </label>
-                      <label className="grid gap-1 text-sm font-medium text-slate-600">
-                        寄件資料（7-11 門市）
-                        <TextArea value={orderForm.shippingInfo} onChange={(e) => setOrderForm({ ...orderForm, shippingInfo: e.target.value })} placeholder="門市名稱 / 代碼 / 收件資訊" />
-                      </label>
-                      <label className="grid gap-1 text-sm font-medium text-slate-600">
-                        LINE 名稱
-                        <TextInput value={orderForm.lineName} onChange={(e) => setOrderForm({ ...orderForm, lineName: e.target.value })} placeholder="LINE 顯示名稱" />
-                      </label>
-                    </div>
-                    <div className="grid gap-2 border-t border-slate-200 pt-4">
-                      {orderItems.map((item) => (
-                        <div key={item.product.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <p className="truncate font-medium">{item.product.name}</p>
-                              <p className="mt-1 text-sm text-slate-500">{currency.format(item.product.price)} · 小計 {currency.format(item.quantity * Number(item.product.price || 0))}</p>
-                            </div>
-                            <Button type="button" variant="danger" className="h-10 w-10 px-0" onClick={() => setOrderItems((current) => current.filter((currentItem) => currentItem.product.id !== item.product.id))}>
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          </div>
-                          <div className="mt-3 flex items-center gap-2">
-                            <Button type="button" variant="secondary" className="h-10 w-10 px-0" onClick={() => updateOrderQuantity(item.product.id, -1)}>
-                              <Minus className="h-4 w-4" />
-                            </Button>
-                            <input
-                              type="number"
-                              min="1"
-                              max={item.product.stock}
-                              value={item.quantity}
-                              onChange={(event) => {
-                                const nextQuantity = Math.max(1, Math.min(item.product.stock, Number(event.target.value) || 1));
-                                setOrderItems((current) =>
-                                  current.map((currentItem) =>
-                                    currentItem.product.id === item.product.id
-                                      ? { ...currentItem, quantity: nextQuantity }
-                                      : currentItem
-                                  )
-                                );
-                              }}
-                              className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-center text-base outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-100 sm:text-sm"
-                            />
-                            <Button type="button" variant="secondary" className="h-10 w-10 px-0" onClick={() => updateOrderQuantity(item.product.id, 1)}>
-                              <Plus className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                    <p className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-600">總金額：{currency.format(orderTotal)}</p>
-                  </div>
-                )}
+            <div className="lg:hidden">
+              <div className="grid grid-cols-2 gap-2 rounded-lg bg-slate-100 p-1 text-sm font-medium">
+                {[
+                  { key: "建立訂單", label: "建立訂單" },
+                  { key: "最近訂單", label: "最近訂單" }
+                ].map((tab) => (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    onClick={() => setQuickOrderMobileTab(tab.key)}
+                    className={`rounded-md px-3 py-2 transition ${quickOrderMobileTab === tab.key ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"}`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
               </div>
             </div>
 
-            <div className="hidden min-w-0 gap-6 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)] lg:grid">
-              <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-                <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <h3 className="text-base font-semibold">商品面板</h3>
-                    <p className="mt-1 text-sm text-slate-500">先選商品，再加入訂單。</p>
-                  </div>
-                  <p className="text-sm font-semibold text-slate-700">可選商品 {number.format(orderProducts.length)} 筆</p>
-                </div>
-                <div className="mb-4">
-                  <div className="relative min-w-0">
-                    <Search className="pointer-events-none absolute left-3 top-2.5 h-5 w-5 text-slate-400" />
-                    <input
-                      value={orderProductSearch}
-                      onChange={(event) => setOrderProductSearch(event.target.value)}
-                      placeholder="搜尋商品名稱、系列、Grade"
-                      className="h-12 w-full rounded-md border border-slate-300 bg-white pl-10 pr-3 text-base outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-100 sm:h-10 sm:text-sm"
-                    />
-                  </div>
-                </div>
-                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                  {orderProducts.map((product) => {
-                    const isSelected = selectedOrderProductId === product.id;
-                    return (
-                      <article
-                        key={product.id}
-                        className={`rounded-lg border p-3 text-left shadow-sm transition ${isSelected ? "border-teal-300 bg-teal-50" : "border-slate-200 hover:border-teal-300 hover:bg-teal-50"}`}
-                      >
-                        <button
-                          type="button"
-                          className="w-full text-left"
-                          onClick={() => {
-                            setSelectedOrderProductId(product.id);
-                            setSelectedOrderQuantity(1);
-                          }}
-                        >
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="min-w-0">
-                              <p className="truncate font-medium">{product.name}</p>
-                              <p className="mt-1 text-sm text-slate-500">{product.series}</p>
+            <div className="grid gap-6 lg:grid-cols-[minmax(0,1.55fr)_minmax(360px,0.9fr)]">
+              <div className={`${quickOrderMobileTab === "建立訂單" ? "block" : "hidden"} lg:block`}>
+                <div className="grid gap-4 lg:hidden">
+                  <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                    <div className="mb-4 flex items-center justify-between gap-3">
+                      <div>
+                        <h3 className="text-base font-semibold">商品面板</h3>
+                        <p className="mt-1 text-sm text-slate-500">先選商品，再加入訂單。</p>
+                      </div>
+                      <p className="text-sm font-semibold text-slate-700">{number.format(orderProducts.length)} 筆</p>
+                    </div>
+                    <div className="relative min-w-0">
+                      <Search className="pointer-events-none absolute left-3 top-2.5 h-5 w-5 text-slate-400" />
+                      <input
+                        value={orderProductSearch}
+                        onChange={(event) => setOrderProductSearch(event.target.value)}
+                        placeholder="搜尋商品名稱、系列、Grade"
+                        className="h-12 w-full rounded-md border border-slate-300 bg-white pl-10 pr-3 text-base outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-100"
+                      />
+                    </div>
+                    <div className="mt-4 grid grid-cols-2 gap-3">
+                      {orderProducts.map((product) => {
+                        const isSelected = selectedOrderProductId === product.id;
+                        return (
+                          <button
+                            key={product.id}
+                            type="button"
+                            onClick={() => openMobileOrderProductDrawer(product)}
+                            className={`rounded-lg border p-3 text-left shadow-sm transition active:scale-[0.99] ${isSelected ? "border-teal-300 bg-teal-50" : "border-slate-200 bg-white hover:border-teal-300 hover:bg-teal-50"}`}
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <p className="truncate font-medium text-slate-950">{product.name}</p>
+                                <p className="mt-1 text-sm text-slate-500">{product.series}</p>
+                              </div>
+                              {product.productType === "graded" && <span className="rounded bg-indigo-50 px-2 py-1 text-[11px] font-medium text-indigo-700">{productBadgeLabel(product)}</span>}
                             </div>
-                            {product.productType === "graded" && <span className="rounded bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700">{productBadgeLabel(product)}</span>}
-                          </div>
-                          <div className="mt-2 flex items-center justify-between text-sm text-slate-600">
-                            <span>{currency.format(product.price)}</span>
-                            <span>{formatStock(product)}</span>
-                          </div>
-                        </button>
-                        {isSelected && (
-                          <div className="mt-3 grid gap-2 border-t border-slate-200 pt-3">
-                            <div className="flex items-center gap-2">
-                              <Button type="button" variant="secondary" className="h-10 w-10 px-0" onClick={(event) => { event.stopPropagation(); setSelectedOrderQuantity((current) => Math.max(1, current - 1)); }}>
-                                <Minus className="h-4 w-4" />
-                              </Button>
-                              <input
-                                type="number"
-                                min="1"
-                                max={product.stock}
-                                value={selectedOrderQuantity}
-                                onChange={(event) => setSelectedOrderQuantity(Math.max(1, Math.min(product.stock, Number(event.target.value) || 1)))}
-                                className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-center text-base outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-100 sm:text-sm"
-                              />
-                              <Button type="button" variant="secondary" className="h-10 w-10 px-0" onClick={(event) => { event.stopPropagation(); setSelectedOrderQuantity((current) => Math.min(product.stock, current + 1)); }}>
-                                <Plus className="h-4 w-4" />
-                              </Button>
+                            <div className="mt-2 flex items-center justify-between text-sm">
+                              <span className="font-semibold text-slate-950">{currency.format(product.price)}</span>
+                              <span className={`rounded px-2 py-1 text-xs font-medium ${product.stock <= product.lowStockThreshold ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-700"}`}>
+                                {formatStock(product)}
+                              </span>
                             </div>
-                            <Button
+                          </button>
+                        );
+                      })}
+                      {orderProducts.length === 0 && <p className="col-span-2 py-6 text-center text-slate-500">沒有可選商品</p>}
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                    <div className="mb-4 flex items-center justify-between gap-3">
+                      <div>
+                        <h3 className="text-base font-semibold">訂單資訊</h3>
+                        <p className="mt-1 text-sm text-slate-500">加入商品後填寫客戶資料並建立訂單。</p>
+                      </div>
+                      <p className="font-semibold">{currency.format(orderTotal)}</p>
+                    </div>
+                    {orderItems.length === 0 ? (
+                      <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+                        先從上方加入商品
+                      </div>
+                    ) : (
+                      <div className="grid gap-4">
+                        <div className="grid gap-3">
+                          <label className="grid gap-1 text-sm font-medium text-slate-600">
+                            客戶名稱
+                            <TextInput value={orderForm.customerName} onChange={(e) => setOrderForm({ ...orderForm, customerName: e.target.value })} placeholder="客戶姓名" />
+                          </label>
+                          <label className="grid gap-1 text-sm font-medium text-slate-600">
+                            電話
+                            <TextInput value={orderForm.phone} onChange={(e) => setOrderForm({ ...orderForm, phone: e.target.value })} placeholder="聯絡電話" />
+                          </label>
+                          <label className="grid gap-1 text-sm font-medium text-slate-600">
+                            寄件資料（7-11 門市）
+                            <TextArea value={orderForm.shippingInfo} onChange={(e) => setOrderForm({ ...orderForm, shippingInfo: e.target.value })} placeholder="門市名稱 / 代碼 / 收件資訊" />
+                          </label>
+                          <label className="grid gap-1 text-sm font-medium text-slate-600">
+                            LINE 名稱
+                            <TextInput value={orderForm.lineName} onChange={(e) => setOrderForm({ ...orderForm, lineName: e.target.value })} placeholder="LINE 顯示名稱" />
+                          </label>
+                        </div>
+                        <div className="grid gap-2 border-t border-slate-200 pt-4">
+                          {orderItems.map((item) => (
+                            <div key={item.product.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <p className="truncate font-medium">{item.product.name}</p>
+                                  <p className="mt-1 text-sm text-slate-500">{currency.format(item.product.price)} · 小計 {currency.format(item.quantity * Number(item.product.price || 0))}</p>
+                                </div>
+                                <Button type="button" variant="danger" className="h-10 w-10 px-0" onClick={() => setOrderItems((current) => current.filter((currentItem) => currentItem.product.id !== item.product.id))}>
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </div>
+                              <div className="mt-3 flex items-center gap-2">
+                                <Button type="button" variant="secondary" className="h-10 w-10 px-0" onClick={() => updateOrderQuantity(item.product.id, -1)}>
+                                  <Minus className="h-4 w-4" />
+                                </Button>
+                                <input
+                                  type="number"
+                                  min="1"
+                                  max={item.product.stock}
+                                  value={item.quantity}
+                                  onChange={(event) => {
+                                    const nextQuantity = Math.max(1, Math.min(item.product.stock, Number(event.target.value) || 1));
+                                    setOrderItems((current) =>
+                                      current.map((currentItem) =>
+                                        currentItem.product.id === item.product.id
+                                          ? { ...currentItem, quantity: nextQuantity }
+                                          : currentItem
+                                      )
+                                    );
+                                  }}
+                                  className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-center text-base outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-100 sm:text-sm"
+                                />
+                                <Button type="button" variant="secondary" className="h-10 w-10 px-0" onClick={() => updateOrderQuantity(item.product.id, 1)}>
+                                  <Plus className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                        <p className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-600">總金額：{currency.format(orderTotal)}</p>
+                        <Button type="button" disabled={orderItems.length === 0} onClick={createOrder}>
+                          <ShoppingCart className="h-4 w-4" />
+                          建立訂單
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="hidden min-w-0 gap-6 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)] lg:grid">
+                  <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                    <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <h3 className="text-base font-semibold">商品面板</h3>
+                        <p className="mt-1 text-sm text-slate-500">先選商品，再加入訂單。</p>
+                      </div>
+                      <p className="text-sm font-semibold text-slate-700">可選商品 {number.format(orderProducts.length)} 筆</p>
+                    </div>
+                    <div className="mb-4">
+                      <div className="relative min-w-0">
+                        <Search className="pointer-events-none absolute left-3 top-2.5 h-5 w-5 text-slate-400" />
+                        <input
+                          value={orderProductSearch}
+                          onChange={(event) => setOrderProductSearch(event.target.value)}
+                          placeholder="搜尋商品名稱、系列、Grade"
+                          className="h-12 w-full rounded-md border border-slate-300 bg-white pl-10 pr-3 text-base outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-100 sm:h-10 sm:text-sm"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                      {orderProducts.map((product) => {
+                        const isSelected = selectedOrderProductId === product.id;
+                        return (
+                          <article
+                            key={product.id}
+                            className={`rounded-lg border p-3 text-left shadow-sm transition ${isSelected ? "border-teal-300 bg-teal-50" : "border-slate-200 hover:border-teal-300 hover:bg-teal-50"}`}
+                          >
+                            <button
                               type="button"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                addOrderItem(product, selectedOrderQuantity);
+                              className="w-full text-left"
+                              onClick={() => {
+                                setSelectedOrderProductId(product.id);
+                                setSelectedOrderQuantity(1);
                               }}
                             >
-                              加入訂單
-                            </Button>
-                          </div>
-                        )}
-                      </article>
-                    );
-                  })}
-                  {orderProducts.length === 0 && <p className="py-6 text-center text-slate-500 md:col-span-2 xl:col-span-3">沒有可選商品</p>}
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                  <p className="truncate font-medium">{product.name}</p>
+                                  <p className="mt-1 text-sm text-slate-500">{product.series}</p>
+                                </div>
+                                {product.productType === "graded" && <span className="rounded bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700">{productBadgeLabel(product)}</span>}
+                              </div>
+                              <div className="mt-2 flex items-center justify-between text-sm text-slate-600">
+                                <span>{currency.format(product.price)}</span>
+                                <span>{formatStock(product)}</span>
+                              </div>
+                            </button>
+                            {isSelected && (
+                              <div className="mt-3 grid gap-2 border-t border-slate-200 pt-3">
+                                <div className="flex items-center gap-2">
+                                  <Button type="button" variant="secondary" className="h-10 w-10 px-0" onClick={(event) => { event.stopPropagation(); setSelectedOrderQuantity((current) => Math.max(1, current - 1)); }}>
+                                    <Minus className="h-4 w-4" />
+                                  </Button>
+                                  <input
+                                    type="number"
+                                    min="1"
+                                    max={product.stock}
+                                    value={selectedOrderQuantity}
+                                    onChange={(event) => setSelectedOrderQuantity(Math.max(1, Math.min(product.stock, Number(event.target.value) || 1)))}
+                                    className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-center text-base outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-100 sm:text-sm"
+                                  />
+                                  <Button type="button" variant="secondary" className="h-10 w-10 px-0" onClick={(event) => { event.stopPropagation(); setSelectedOrderQuantity((current) => Math.min(product.stock, current + 1)); }}>
+                                    <Plus className="h-4 w-4" />
+                                  </Button>
+                                </div>
+                                <Button
+                                  type="button"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    addOrderItem(product, selectedOrderQuantity);
+                                  }}
+                                >
+                                  加入訂單
+                                </Button>
+                              </div>
+                            )}
+                          </article>
+                        );
+                      })}
+                      {orderProducts.length === 0 && <p className="py-6 text-center text-slate-500 md:col-span-2 xl:col-span-3">沒有可選商品</p>}
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                    <div className="mb-4 flex items-center justify-between gap-3">
+                      <div>
+                        <h3 className="text-base font-semibold">訂單資訊</h3>
+                        <p className="mt-1 text-sm text-slate-500">加入商品後填寫客戶資料並建立訂單。</p>
+                      </div>
+                      <p className="font-semibold">{currency.format(orderTotal)}</p>
+                    </div>
+                    {orderItems.length === 0 ? (
+                      <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+                        先從左側加入商品
+                      </div>
+                    ) : (
+                      <div className="grid gap-4">
+                        <div className="grid gap-3">
+                          <label className="grid gap-1 text-sm font-medium text-slate-600">
+                            客戶名稱
+                            <TextInput value={orderForm.customerName} onChange={(e) => setOrderForm({ ...orderForm, customerName: e.target.value })} placeholder="客戶姓名" />
+                          </label>
+                          <label className="grid gap-1 text-sm font-medium text-slate-600">
+                            電話
+                            <TextInput value={orderForm.phone} onChange={(e) => setOrderForm({ ...orderForm, phone: e.target.value })} placeholder="聯絡電話" />
+                          </label>
+                          <label className="grid gap-1 text-sm font-medium text-slate-600">
+                            寄件資料（7-11 門市）
+                            <TextArea value={orderForm.shippingInfo} onChange={(e) => setOrderForm({ ...orderForm, shippingInfo: e.target.value })} placeholder="門市名稱 / 代碼 / 收件資訊" />
+                          </label>
+                          <label className="grid gap-1 text-sm font-medium text-slate-600">
+                            LINE 名稱
+                            <TextInput value={orderForm.lineName} onChange={(e) => setOrderForm({ ...orderForm, lineName: e.target.value })} placeholder="LINE 顯示名稱" />
+                          </label>
+                        </div>
+                        <div className="grid gap-2 border-t border-slate-200 pt-4">
+                          {orderItems.map((item) => (
+                            <div key={item.product.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <p className="truncate font-medium">{item.product.name}</p>
+                                  <p className="mt-1 text-sm text-slate-500">{currency.format(item.product.price)} · 小計 {currency.format(item.quantity * Number(item.product.price || 0))}</p>
+                                </div>
+                                <Button type="button" variant="danger" className="h-10 w-10 px-0" onClick={() => setOrderItems((current) => current.filter((currentItem) => currentItem.product.id !== item.product.id))}>
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </div>
+                              <div className="mt-3 flex items-center gap-2">
+                                <Button type="button" variant="secondary" className="h-10 w-10 px-0" onClick={() => updateOrderQuantity(item.product.id, -1)}>
+                                  <Minus className="h-4 w-4" />
+                                </Button>
+                                <input
+                                  type="number"
+                                  min="1"
+                                  max={item.product.stock}
+                                  value={item.quantity}
+                                  onChange={(event) => {
+                                    const nextQuantity = Math.max(1, Math.min(item.product.stock, Number(event.target.value) || 1));
+                                    setOrderItems((current) =>
+                                      current.map((currentItem) =>
+                                        currentItem.product.id === item.product.id
+                                          ? { ...currentItem, quantity: nextQuantity }
+                                          : currentItem
+                                      )
+                                    );
+                                  }}
+                                  className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-center text-base outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-100 sm:text-sm"
+                                />
+                                <Button type="button" variant="secondary" className="h-10 w-10 px-0" onClick={() => updateOrderQuantity(item.product.id, 1)}>
+                                  <Plus className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                        <Button type="button" disabled={orderItems.length === 0} onClick={createOrder}>
+                          <ShoppingCart className="h-4 w-4" />
+                          建立訂單
+                        </Button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
 
-              <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-                <div className="mb-4 flex items-center justify-between gap-3">
-                  <div>
-                    <h3 className="text-base font-semibold">訂單資訊</h3>
-                    <p className="mt-1 text-sm text-slate-500">加入商品後填寫客戶資料並建立訂單。</p>
-                  </div>
-                  <p className="font-semibold">{currency.format(orderTotal)}</p>
-                </div>
-                {orderItems.length === 0 ? (
-                  <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
-                    先從左側加入商品
-                  </div>
-                ) : (
-                  <div className="grid gap-4">
-                    <div className="grid gap-3">
-                      <label className="grid gap-1 text-sm font-medium text-slate-600">
-                        客戶名稱
-                        <TextInput value={orderForm.customerName} onChange={(e) => setOrderForm({ ...orderForm, customerName: e.target.value })} placeholder="客戶姓名" />
-                      </label>
-                      <label className="grid gap-1 text-sm font-medium text-slate-600">
-                        電話
-                        <TextInput value={orderForm.phone} onChange={(e) => setOrderForm({ ...orderForm, phone: e.target.value })} placeholder="聯絡電話" />
-                      </label>
-                      <label className="grid gap-1 text-sm font-medium text-slate-600">
-                        寄件資料（7-11 門市）
-                        <TextArea value={orderForm.shippingInfo} onChange={(e) => setOrderForm({ ...orderForm, shippingInfo: e.target.value })} placeholder="門市名稱 / 代碼 / 收件資訊" />
-                      </label>
-                      <label className="grid gap-1 text-sm font-medium text-slate-600">
-                        LINE 名稱
-                        <TextInput value={orderForm.lineName} onChange={(e) => setOrderForm({ ...orderForm, lineName: e.target.value })} placeholder="LINE 顯示名稱" />
-                      </label>
+              <div className={`${quickOrderMobileTab === "最近訂單" ? "block" : "hidden"} lg:block`}>
+                <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm lg:max-h-[calc(100vh-220px)] lg:overflow-y-auto">
+                  <div className="mb-4 flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <h3 className="text-base font-semibold">最近訂單紀錄</h3>
+                      <p className="mt-1 text-sm text-slate-500">輸入客戶名稱或 LINE 名稱會自動過濾。預設顯示最近 10 筆。</p>
                     </div>
-                    <div className="grid gap-2 border-t border-slate-200 pt-4">
-                      {orderItems.map((item) => (
-                        <div key={item.product.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <p className="truncate font-medium">{item.product.name}</p>
-                              <p className="mt-1 text-sm text-slate-500">{currency.format(item.product.price)} · 小計 {currency.format(item.quantity * Number(item.product.price || 0))}</p>
-                            </div>
-                            <Button type="button" variant="danger" className="h-10 w-10 px-0" onClick={() => setOrderItems((current) => current.filter((currentItem) => currentItem.product.id !== item.product.id))}>
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          </div>
-                          <div className="mt-3 flex items-center gap-2">
-                            <Button type="button" variant="secondary" className="h-10 w-10 px-0" onClick={() => updateOrderQuantity(item.product.id, -1)}>
-                              <Minus className="h-4 w-4" />
-                            </Button>
-                            <input
-                              type="number"
-                              min="1"
-                              max={item.product.stock}
-                              value={item.quantity}
-                              onChange={(event) => {
-                                const nextQuantity = Math.max(1, Math.min(item.product.stock, Number(event.target.value) || 1));
-                                setOrderItems((current) =>
-                                  current.map((currentItem) =>
-                                    currentItem.product.id === item.product.id
-                                      ? { ...currentItem, quantity: nextQuantity }
-                                      : currentItem
-                                  )
-                                );
-                              }}
-                              className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-center text-base outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-100 sm:text-sm"
-                            />
-                            <Button type="button" variant="secondary" className="h-10 w-10 px-0" onClick={() => updateOrderQuantity(item.product.id, 1)}>
-                              <Plus className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        </div>
-                      ))}
+                    <div className="shrink-0 text-right text-xs text-slate-500">
+                      <p>符合 {number.format(recentOrdersFiltered.length)} 筆</p>
+                      <p>顯示 {number.format(recentOrders.length)} 筆</p>
                     </div>
-                    <Button type="button" disabled={orderItems.length === 0} onClick={createOrder}>
-                      <ShoppingCart className="h-4 w-4" />
-                      建立訂單
+                  </div>
+                  <div className="mb-4 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+                    <div className="relative min-w-0">
+                      <Search className="pointer-events-none absolute left-3 top-2.5 h-5 w-5 text-slate-400" />
+                      <input
+                        value={recentOrderSearch}
+                        onChange={(event) => setRecentOrderSearch(event.target.value)}
+                        placeholder="搜尋客戶、LINE、訂單編號"
+                        className="h-12 w-full rounded-md border border-slate-300 bg-white pl-10 pr-3 text-base outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-100 sm:h-10 sm:text-sm"
+                      />
+                    </div>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      className="w-full sm:w-auto"
+                      onClick={() => {
+                        setRecentOrderSearch("");
+                        setExpandedRecentOrderId(null);
+                      }}
+                    >
+                      清除
                     </Button>
                   </div>
-                )}
+                  <div className="grid gap-3">
+                    {recentOrders.map((order) => (
+                      <RecentOrderCard
+                        key={order.id}
+                        order={order}
+                        expanded={expandedRecentOrderId === order.id}
+                        onToggle={(orderId) => setExpandedRecentOrderId((current) => (current === orderId ? null : orderId))}
+                      />
+                    ))}
+                    {recentOrders.length === 0 && (
+                      <p className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+                        沒有符合條件的訂單
+                      </p>
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
 
