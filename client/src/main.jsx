@@ -57,12 +57,12 @@ const PRODUCT_TYPE_OPTIONS = [
 ];
 const GRADING_COMPANIES = ["PSA", "BGS", "CGC"];
 const ORDER_STATUS_OPTIONS = [
-  "待出貨",
+  "待處理",
   "已完成",
   "已取消"
 ];
-const ORDER_PENDING_STATUSES = new Set(["待出貨"]);
-const ORDER_DONE_STATUSES = new Set(["已完成", "已取消"]);
+const ORDER_PENDING_STATUSES = new Set(["待處理", "待出貨", "pending"]);
+const ORDER_DONE_STATUSES = new Set(["已完成", "已出貨", "completed", "done", "已取消", "cancelled", "canceled"]);
 const LIST_PAGE_SIZE = 10;
 const INVENTORY_LOG_TYPE_OPTIONS = [
   { value: "全部", label: "全部異動類型" },
@@ -186,13 +186,16 @@ function productBadgeLabel(product) {
 }
 
 function orderStatusLabel(status) {
-  return status ?? "待出貨";
+  if (["已取消", "cancelled", "canceled"].includes(status)) return "已取消";
+  if (["已完成", "已出貨", "completed", "done"].includes(status)) return "已完成";
+  return "待處理";
 }
 
 function orderStatusTone(status) {
-  if (status === "已取消") return "bg-slate-100 text-slate-700";
-  if (status === "已完成") return "bg-emerald-50 text-emerald-700";
-  if (status === "待出貨") return "bg-amber-50 text-amber-700";
+  const normalized = orderStatusLabel(status);
+  if (normalized === "已取消") return "bg-slate-100 text-slate-700";
+  if (normalized === "已完成") return "bg-emerald-50 text-emerald-700";
+  if (normalized === "待處理") return "bg-amber-50 text-amber-700";
   return "bg-rose-50 text-rose-700";
 }
 
@@ -2994,7 +2997,7 @@ function App() {
 
                 <div className="h-[68vh] overflow-y-auto rounded-lg border border-slate-200 bg-slate-50 p-3">
                 {[
-                  { key: "待處理", orders: pendingOrders, empty: "尚無待出貨訂單", allowActions: true },
+                  { key: "待處理", orders: pendingOrders, empty: "尚無待處理訂單", allowActions: true },
                   { key: "已完成", orders: doneOrders.filter((order) => order.status === "已完成"), empty: "尚無已完成訂單", allowActions: false },
                   { key: "已取消", orders: doneOrders.filter((order) => order.status === "已取消"), empty: "尚無已取消訂單", allowActions: false }
                 ].filter((tab) => tab.key === mobileOrderTab).map((tab) => (
@@ -3066,7 +3069,7 @@ function App() {
               <div className="hidden lg:block">
                 <div className="grid h-[68vh] gap-4 lg:grid-cols-3">
                 {[
-                  { title: "待處理", orders: pendingOrders, empty: "尚無待出貨訂單", showActions: true },
+                  { title: "待處理", orders: pendingOrders, empty: "尚無待處理訂單", showActions: true },
                   { title: "已完成", orders: doneOrders.filter((order) => order.status === "已完成"), empty: "尚無已完成訂單", showActions: false },
                   { title: "已取消", orders: doneOrders.filter((order) => order.status === "已取消"), empty: "尚無已取消訂單", showActions: false }
                 ].map((column) => (
@@ -3184,7 +3187,7 @@ function App() {
               <div className="h-[68vh] overflow-y-auto rounded-lg border border-slate-200 bg-slate-50 p-3">
                 {(mobileOrderTab === "待處理" ? visiblePendingOrders : mobileOrderTab === "已完成" ? visibleCompletedOrders : visibleCancelledOrders).length === 0 ? (
                   <p className="py-6 text-center text-slate-500">
-                    {mobileOrderTab === "待處理" ? "尚無待出貨訂單" : mobileOrderTab === "已完成" ? "尚無已完成訂單" : "尚無已取消訂單"}
+                    {mobileOrderTab === "待處理" ? "尚無待處理訂單" : mobileOrderTab === "已完成" ? "尚無已完成訂單" : "尚無已取消訂單"}
                   </p>
                 ) : (
                   <div className="grid gap-3">
@@ -3206,7 +3209,7 @@ function App() {
                         </div>
                         <div className="mt-3 grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
                           <SelectInput
-                            value={orderStatusDrafts[order.id] ?? order.status ?? "待出貨"}
+                            value={orderStatusDrafts[order.id] ?? order.status ?? "待處理"}
                             onChange={(event) => setOrderStatusDrafts((current) => ({ ...current, [order.id]: event.target.value }))}
                           >
                             {ORDER_STATUS_OPTIONS.map((status) => (
@@ -3214,7 +3217,7 @@ function App() {
                             ))}
                           </SelectInput>
                           <div className="grid grid-cols-2 gap-2">
-                            <Button type="button" className="h-11 w-full" onClick={() => updateOrderStatus(order.id, orderStatusDrafts[order.id] ?? order.status ?? "待出貨")}>
+                            <Button type="button" className="h-11 w-full" onClick={() => updateOrderStatus(order.id, orderStatusDrafts[order.id] ?? order.status ?? "待處理")}>
                               調整狀態
                             </Button>
                             <Button
@@ -3243,7 +3246,7 @@ function App() {
 
             <div className="hidden gap-4 lg:grid">
               {[
-                { title: "待處理", orders: visiblePendingOrders, allOrders: pendingOrders, page: currentPendingOrderPage, pageCount: pendingOrderPageCount, onPageChange: setPendingOrderPage, empty: "尚無待出貨訂單" },
+                { title: "待處理", orders: visiblePendingOrders, allOrders: pendingOrders, page: currentPendingOrderPage, pageCount: pendingOrderPageCount, onPageChange: setPendingOrderPage, empty: "尚無待處理訂單" },
                 { title: "已完成", orders: visibleCompletedOrders, allOrders: doneOrders.filter((order) => order.status === "已完成"), page: currentCompletedOrderPage, pageCount: completedOrderPageCount, onPageChange: setCompletedOrderPage, empty: "尚無已完成訂單" },
                 { title: "已取消", orders: visibleCancelledOrders, allOrders: cancelledOrders, page: currentCancelledOrderPage, pageCount: cancelledOrderPageCount, onPageChange: setCancelledOrderPage, empty: "尚無已取消訂單" }
               ].map((block) => (
@@ -3299,7 +3302,7 @@ function App() {
                                 <td className="py-3 pr-4 align-top">
                                   <div className="grid min-w-44 gap-2">
                                     <SelectInput
-                                      value={orderStatusDrafts[order.id] ?? order.status ?? "待出貨"}
+                                      value={orderStatusDrafts[order.id] ?? order.status ?? "待處理"}
                                       onChange={(event) => setOrderStatusDrafts((current) => ({ ...current, [order.id]: event.target.value }))}
                                     >
                                       {ORDER_STATUS_OPTIONS.map((status) => (
@@ -3307,7 +3310,7 @@ function App() {
                                       ))}
                                     </SelectInput>
                                     <div className="grid gap-2">
-                                      <Button type="button" className="h-10 w-full" onClick={() => updateOrderStatus(order.id, orderStatusDrafts[order.id] ?? order.status ?? "待出貨")}>
+                                      <Button type="button" className="h-10 w-full" onClick={() => updateOrderStatus(order.id, orderStatusDrafts[order.id] ?? order.status ?? "待處理")}>
                                         調整狀態
                                       </Button>
                                       <Button
@@ -3939,7 +3942,7 @@ function App() {
                       刪除
                     </Button>
                   </div>
-                ) : mobileDrawer.type === "order" && mobileDrawer.order.status === "待出貨" ? (
+                ) : mobileDrawer.type === "order" && mobileDrawer.order.status === "待處理" ? (
                   <div className="grid gap-2 sm:grid-cols-2">
                     <Button
                       type="button"

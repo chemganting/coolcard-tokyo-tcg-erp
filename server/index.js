@@ -17,7 +17,7 @@ const allowedUnits = new Set(["單張", "包", "盒", "箱", "組", "其他"]);
 const productTypes = new Set(["normal", "graded"]);
 const gradingCompanies = new Set(["PSA", "BGS", "CGC"]);
 const paymentStatuses = new Set(["未付款", "已付款", "部分付款"]);
-const orderStatuses = new Set(["待出貨", "已完成", "已取消"]);
+const orderStatuses = new Set(["待處理", "已完成", "已取消"]);
 const reportSheetTabs = ["今日營收", "庫存總表", "熱銷排行"];
 const reportTimeZone = process.env.REPORT_TIMEZONE ?? process.env.BACKUP_TIMEZONE ?? "Asia/Taipei";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -139,9 +139,14 @@ function purchasePayload(body) {
 }
 
 function normalizeOrderStatus(status) {
-  if (status === "已取消") return "已取消";
-  if (status === "已完成" || status === "已出貨") return "已完成";
-  return "待出貨";
+  if (["已取消", "cancelled", "canceled"].includes(status)) return "已取消";
+  if (["已完成", "已出貨", "completed", "done"].includes(status)) return "已完成";
+  if (["待處理", "待出貨", "pending"].includes(status)) return "待處理";
+  return "待處理";
+}
+
+function isPendingOrderStatus(status) {
+  return ["待處理", "待出貨", "pending"].includes(status);
 }
 
 function validatePurchase(purchase) {
@@ -162,7 +167,7 @@ function orderPayload(body) {
     phone: String(body.phone ?? "").trim(),
     shippingInfo: String(body.shippingInfo ?? "").trim(),
     lineName: String(body.lineName ?? "").trim(),
-    status: "待出貨",
+    status: "待處理",
     items: Array.isArray(body.items)
       ? body.items.map((item) => ({
           productId: Number(item.productId),
@@ -183,13 +188,14 @@ function validateOrder(order) {
 }
 
 function orderStatusLabel(status) {
-  return status;
+  return normalizeOrderStatus(status);
 }
 
 function orderStatusTone(status) {
-  if (status === "已取消") return "bg-slate-100 text-slate-700";
-  if (status === "已完成") return "bg-emerald-50 text-emerald-700";
-  if (status === "待出貨") return "bg-amber-50 text-amber-700";
+  const normalized = normalizeOrderStatus(status);
+  if (normalized === "已取消") return "bg-slate-100 text-slate-700";
+  if (normalized === "已完成") return "bg-emerald-50 text-emerald-700";
+  if (normalized === "待處理") return "bg-amber-50 text-amber-700";
   return "bg-rose-50 text-rose-700";
 }
 
@@ -1143,7 +1149,12 @@ async function orderById(client, id) {
     `,
     [id]
   );
-  return rows[0] ?? null;
+  const row = rows[0] ?? null;
+  if (!row) return null;
+  return {
+    ...row,
+    status: normalizeOrderStatus(row.status)
+  };
 }
 
 async function orderItemsByOrderId(client, orderId) {
@@ -1599,7 +1610,10 @@ app.get("/api/products", currentUser, async (request, response, next) => {
       `,
       [keyword]
     );
-    response.json(rowsToCamel(rows));
+    response.json(rowsToCamel(rows).map((order) => ({
+      ...order,
+      status: normalizeOrderStatus(order.status)
+    })));
   } catch (error) {
     next(error);
   }
@@ -2571,8 +2585,8 @@ app.post("/api/orders", currentUser, async (request, response, next) => {
 });
 
 async function updateOrderStatus(request, response, next) {
-  const nextStatus = String(request.body.status ?? "").trim();
-  if (!["待出貨", "已完成", "已取消"].includes(nextStatus)) {
+  const nextStatus = normalizeOrderStatus(String(request.body.status ?? "").trim());
+  if (!orderStatuses.has(nextStatus)) {
     return response.status(400).json({ message: "訂單狀態不合法" });
   }
 
@@ -2590,7 +2604,8 @@ async function updateOrderStatus(request, response, next) {
     }
 
     const beforeSnapshot = await orderById(client, beforeOrder.id);
-    if (beforeOrder.status === nextStatus) {
+    const currentStatus = normalizeOrderStatus(beforeOrder.status);
+    if (currentStatus === nextStatus) {
       await client.query("ROLLBACK");
       return response.json(rowsToCamel([beforeSnapshot])[0]);
     }
@@ -2679,7 +2694,7 @@ async function updateOrderStatus(request, response, next) {
         );
       }
       await writeInventoryLog(client, request, null, "order_completed", 0, 0, 0, "order", beforeOrder.id, "訂單已完成");
-    } else if (nextStatus === "已取消" || nextStatus === "待出貨") {
+    } else if (nextStatus === "已取消" || nextStatus === "待處理") {
       for (const productId of productIds) {
         const product = productMap.get(productId);
         const productSales = salesByProduct.get(productId) ?? [];
@@ -2720,7 +2735,7 @@ async function updateOrderStatus(request, response, next) {
       { order: beforeSnapshot, products: beforeProducts.length ? beforeProducts : undefined },
       {
         order: afterOrder,
-        statusMessage: nextStatus === "已完成" ? "訂單已完成" : nextStatus === "已取消" ? "訂單已取消" : "訂單已回到待出貨",
+        statusMessage: nextStatus === "已完成" ? "訂單已完成" : nextStatus === "已取消" ? "訂單已取消" : "訂單已回到待處理",
         products: afterProducts.length ? afterProducts : undefined
       }
     );
@@ -2779,7 +2794,11 @@ app.get("/api/orders/:id", currentUser, async (request, response, next) => {
       [request.params.id]
     );
     if (!rows[0]) return response.status(404).json({ message: "訂單不存在" });
-    response.json(rowsToCamel(rows)[0]);
+    const order = rowsToCamel(rows)[0];
+    response.json({
+      ...order,
+      status: normalizeOrderStatus(order.status)
+    });
   } catch (error) {
     next(error);
   }
@@ -2954,9 +2973,9 @@ app.post("/api/undo", currentUser, async (request, response, next) => {
         const orderId = after.order?.id ?? before.order?.id ?? after.id ?? before.id;
         if (orderId) {
           const currentOrder = await orderById(client, orderId);
-          if (currentOrder && before.order?.status === "待出貨") {
+          if (currentOrder && normalizeOrderStatus(before.order?.status) === "待處理") {
             const items = await orderItemsByOrderId(client, orderId);
-            if (currentOrder.status === "已取消") {
+            if (normalizeOrderStatus(currentOrder.status) === "已取消") {
               for (const item of items) {
                 const productResult = await client.query("SELECT id, stock FROM products WHERE id = $1 FOR UPDATE", [item.product_id]);
                 const product = productResult.rows[0];
@@ -2977,7 +2996,7 @@ app.post("/api/undo", currentUser, async (request, response, next) => {
                 );
               }
             }
-            await client.query("UPDATE orders SET status = '待出貨', updated_at = NOW() WHERE id = $1", [orderId]);
+            await client.query("UPDATE orders SET status = '待處理', updated_at = NOW() WHERE id = $1", [orderId]);
           }
         }
       }
