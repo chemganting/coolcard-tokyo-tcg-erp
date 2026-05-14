@@ -1640,7 +1640,10 @@ app.get("/api/products/deleted", currentUser, requireAdmin, async (_request, res
         ORDER BY products.deleted_at DESC, products.id DESC
       `
     );
-    response.json(rowsToCamel(rows));
+    response.json(rowsToCamel(rows).map((order) => ({
+      ...order,
+      status: normalizeOrderStatus(order.status)
+    })));
   } catch (error) {
     next(error);
   }

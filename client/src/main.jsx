@@ -852,11 +852,15 @@ function App() {
         isAdmin ? api("/backups").catch(() => []) : Promise.resolve([]),
         api("/inventory-logs").catch(() => [])
       ]);
+      const normalizeOrders = (rows) => rows.map((order) => ({
+        ...order,
+        status: orderStatusKey(order.status)
+      }));
       setProducts(productRows);
       setDeletedProducts(deletedProductRows);
       setPurchases(purchaseRows);
       setSales(saleRows);
-      setOrders(orderRows);
+      setOrders(normalizeOrders(orderRows));
       setDashboard(dashboardRow);
       setProfitReport(profitRow);
       setEmployees(employeeRows);
