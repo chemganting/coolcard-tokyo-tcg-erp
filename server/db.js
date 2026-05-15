@@ -274,6 +274,15 @@ export async function initDb() {
     await client.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS created_by INTEGER REFERENCES users(id) ON DELETE SET NULL");
     await client.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()");
     await client.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()");
+    await client.query(`
+      UPDATE orders
+      SET status = CASE
+        WHEN status IN ('待處理', 'pending', 'Pending') THEN 'pending'
+        WHEN status IN ('已完成', 'completed', 'Completed') THEN 'completed'
+        WHEN status IN ('已取消', 'cancelled', 'canceled', 'Cancelled') THEN 'cancelled'
+        ELSE 'pending'
+      END
+    `);
     await client.query("ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_status_check");
     await client.query("ALTER TABLE orders ADD CONSTRAINT orders_status_check CHECK (status IN ('pending', 'completed', 'cancelled'))");
     await client.query("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE");
@@ -298,16 +307,6 @@ export async function initDb() {
     await client.query("UPDATE orders SET phone = '' WHERE phone IS NULL");
     await client.query("UPDATE orders SET shipping_info = '' WHERE shipping_info IS NULL");
     await client.query("UPDATE orders SET line_name = '' WHERE line_name IS NULL");
-    await client.query(`
-      UPDATE orders
-      SET status = CASE
-        WHEN status IS NULL OR btrim(status) = '' THEN 'pending'
-        WHEN btrim(status) IN ('待處理', '待出貨', 'pending') THEN 'pending'
-        WHEN btrim(status) IN ('已完成', '已出貨', 'completed', 'done') THEN 'completed'
-        WHEN btrim(status) IN ('已取消', 'cancelled', 'canceled') THEN 'cancelled'
-        ELSE 'pending'
-      END
-    `);
     await client.query("UPDATE orders SET stock_deducted = CASE WHEN status = 'cancelled' THEN FALSE ELSE TRUE END WHERE stock_deducted IS DISTINCT FROM CASE WHEN status = 'cancelled' THEN FALSE ELSE TRUE END");
     await client.query("UPDATE sales SET order_id = NULL WHERE order_id IS NULL");
 
