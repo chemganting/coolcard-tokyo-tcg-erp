@@ -214,6 +214,49 @@ function orderSummaryText(order) {
     .join("、") + (items.length > 2 ? ` 等 ${number.format(items.length)} 項商品` : "");
 }
 
+function orderSummaryPreviewText(order) {
+  const items = Array.isArray(order?.items) ? order.items : [];
+  if (items.length === 0) return "無商品";
+  const firstItem = items[0];
+  const firstLabel = `${firstItem.productName ?? "商品"}${Number(firstItem.quantity) > 1 ? ` x${number.format(Number(firstItem.quantity) || 0)}` : ""}`;
+  if (items.length === 1) return firstLabel;
+  return `${firstLabel} 等 ${number.format(items.length)} 件商品`;
+}
+
+function OrderSummaryDisclosure({ order, expanded, onToggle }) {
+  const items = Array.isArray(order?.items) ? order.items : [];
+  const summaryText = orderSummaryPreviewText(order);
+  return (
+    <div className="grid gap-2">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="inline-flex w-fit items-center gap-2 rounded-md px-0 text-left text-sm font-medium text-slate-700 transition hover:text-teal-700"
+        aria-expanded={expanded}
+      >
+        <span className="truncate">{summaryText}</span>
+        <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${expanded ? "rotate-180" : ""}`} />
+      </button>
+      {expanded && (
+        <div className="grid gap-2 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
+          {items.map((item) => (
+            <div key={item.id} className="grid gap-1 border-b border-slate-200 pb-2 last:border-0 last:pb-0">
+              <div className="flex items-start justify-between gap-3">
+                <span className="min-w-0 font-medium text-slate-800">{item.productName}</span>
+                <span className="shrink-0 whitespace-nowrap">x{number.format(Number(item.quantity) || 0)}</span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span>單價 {currency.format(Number(item.unitPrice || 0))}</span>
+                <span>小計 {currency.format(Number(item.subtotal || 0))}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function orderShippingSummary(order) {
   const data = parseShippingAssistantData(order);
   return [
@@ -761,6 +804,7 @@ function App() {
   const [mobileOrderTab, setMobileOrderTab] = useState("待處理");
   const [mobileDrawer, setMobileDrawer] = useState(null);
   const [shippingAssistantOrderId, setShippingAssistantOrderId] = useState(null);
+  const [expandedOrderSummaryIds, setExpandedOrderSummaryIds] = useState({});
   const [orderStatusDrafts, setOrderStatusDrafts] = useState({});
   const [pendingOrderPage, setPendingOrderPage] = useState(1);
   const [completedOrderPage, setCompletedOrderPage] = useState(1);
@@ -789,6 +833,10 @@ function App() {
   const [dateRange, setDateRange] = useState({ from: new Date().toISOString().slice(0, 10), to: new Date().toISOString().slice(0, 10) });
   const productAutosaveReady = useRef(false);
   const employeeAutosaveReady = useRef(false);
+
+  const toggleOrderSummary = (orderId) => {
+    setExpandedOrderSummaryIds((current) => ({ ...current, [orderId]: !current[orderId] }));
+  };
 
   const isAdmin = auth?.user?.role === "admin";
   const navigationItems = useMemo(() => ([
@@ -3210,17 +3258,16 @@ function App() {
                           <span className={`rounded px-2 py-1 text-xs font-medium ${orderStatusTone(order.status)}`}>{orderStatusLabel(order.status)}</span>
                         </div>
                         <div className="mt-3 grid gap-2 text-sm text-slate-600">
-                          <p>商品摘要 {orderSummaryText(order)}</p>
+                          <div className="grid gap-1">
+                            <span className="text-slate-500">商品摘要</span>
+                            <OrderSummaryDisclosure
+                              order={order}
+                              expanded={Boolean(expandedOrderSummaryIds[order.id])}
+                              onToggle={() => toggleOrderSummary(order.id)}
+                            />
+                          </div>
                           <p>訂單金額 {currency.format(order.totalAmount)}</p>
                           <p>建立時間 {new Date(order.createdAt).toLocaleString("zh-TW")}</p>
-                        </div>
-                        <div className="mt-3 grid gap-2 rounded-md border border-slate-200 bg-slate-50 p-3">
-                          {order.items.map((item) => (
-                            <div key={item.id} className="flex items-center justify-between gap-3 py-1 text-sm">
-                              <span className="min-w-0 truncate">{item.productName}</span>
-                              <span className="shrink-0">x{item.quantity} · {currency.format(item.subtotal)}</span>
-                            </div>
-                          ))}
                         </div>
                         <div className="mt-3 grid grid-cols-2 gap-2">
                           <Button type="button" variant="secondary" className="w-full" onClick={() => openMobileOrderDrawer(order)}>
@@ -3288,17 +3335,16 @@ function App() {
                             <span className={`rounded px-2 py-1 text-xs font-medium ${orderStatusTone(order.status)}`}>{orderStatusLabel(order.status)}</span>
                           </div>
                           <div className="mt-3 grid gap-2 text-sm text-slate-600">
-                            <p>商品摘要 {orderSummaryText(order)}</p>
+                            <div className="grid gap-1">
+                              <span className="text-slate-500">商品摘要</span>
+                              <OrderSummaryDisclosure
+                                order={order}
+                                expanded={Boolean(expandedOrderSummaryIds[order.id])}
+                                onToggle={() => toggleOrderSummary(order.id)}
+                              />
+                            </div>
                             <p>訂單金額 {currency.format(order.totalAmount)}</p>
                             <p>建立時間 {new Date(order.createdAt).toLocaleString("zh-TW")}</p>
-                            <div className="grid gap-2 rounded-md border border-slate-200 bg-slate-50 p-3">
-                              {order.items.map((item) => (
-                                <div key={item.id} className="flex items-center justify-between gap-3">
-                                  <span className="min-w-0 truncate">{item.productName}</span>
-                                  <span className="shrink-0">x{item.quantity} · {currency.format(item.subtotal)}</span>
-                                </div>
-                              ))}
-                            </div>
                           </div>
                           {column.showActions && (
                             <div className="mt-3 flex flex-col gap-2 sm:flex-row">
@@ -3398,7 +3444,14 @@ function App() {
                           <span className={`rounded px-2 py-1 text-xs font-medium ${orderStatusTone(order.status)}`}>{orderStatusLabel(order.status)}</span>
                         </div>
                         <div className="mt-3 grid gap-2 text-sm text-slate-600">
-                          <p>商品摘要 {orderSummaryText(order)}</p>
+                          <div className="grid gap-1">
+                            <span className="text-slate-500">商品摘要</span>
+                            <OrderSummaryDisclosure
+                              order={order}
+                              expanded={Boolean(expandedOrderSummaryIds[order.id])}
+                              onToggle={() => toggleOrderSummary(order.id)}
+                            />
+                          </div>
                           <p>金額 {currency.format(order.totalAmount)}</p>
                           <p>寄件資料 {orderShippingSummary(order)}</p>
                           <p>建立時間 {new Date(order.createdAt).toLocaleString("zh-TW")}</p>
@@ -3482,7 +3535,13 @@ function App() {
                                 <td className="py-3 pr-4 whitespace-nowrap">{order.customerName || "-"}</td>
                                 <td className="py-3 pr-4 whitespace-nowrap">{order.lineName || "-"}</td>
                                 <td className="py-3 pr-4 whitespace-nowrap">{order.phone || "-"}</td>
-                                <td className="py-3 pr-4 font-medium">{orderSummaryText(order)}</td>
+                                <td className="py-3 pr-4 align-top">
+                                  <OrderSummaryDisclosure
+                                    order={order}
+                                    expanded={Boolean(expandedOrderSummaryIds[order.id])}
+                                    onToggle={() => toggleOrderSummary(order.id)}
+                                  />
+                                </td>
                                 <td className="py-3 pr-4 whitespace-nowrap">{number.format(order.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0))}</td>
                                 <td className="py-3 pr-4 font-semibold whitespace-nowrap">{currency.format(order.totalAmount)}</td>
                                 <td className="py-3 pr-4">
