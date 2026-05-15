@@ -1538,7 +1538,7 @@ function App() {
         body: JSON.stringify({ status })
       });
       setAutoSaveStatus("訂單狀態已更新");
-      await refreshOrdersData({ includeSales: status === "completed" });
+      await refreshOrdersData({ includeSales: true });
     } catch (err) {
       setError(err.message);
     }

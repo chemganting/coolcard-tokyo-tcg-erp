@@ -837,10 +837,16 @@ async function restoreDatabaseBackup(filename) {
     }
 
     for (const order of data.orders ?? []) {
+      const normalizedStatus = normalizeOrderStatus(order.status ?? order.orderStatus);
+      const stockDeducted = typeof order.stock_deducted === "boolean"
+        ? order.stock_deducted
+        : typeof order.stockDeducted === "boolean"
+          ? order.stockDeducted
+          : normalizedStatus !== "cancelled";
       await client.query(
         `
-          INSERT INTO orders (id, customer_name, phone, shipping_info, line_name, status, total_amount, created_by, created_at, updated_at)
-          VALUES ($1, $2, $3, $4, $5, $6, $7::numeric, (SELECT id FROM users WHERE id = $8), COALESCE($9::timestamptz, NOW()), COALESCE($10::timestamptz, NOW()))
+          INSERT INTO orders (id, customer_name, phone, shipping_info, line_name, status, stock_deducted, total_amount, created_by, created_at, updated_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8::numeric, (SELECT id FROM users WHERE id = $9), COALESCE($10::timestamptz, NOW()), COALESCE($11::timestamptz, NOW()))
         `,
         [
           order.id,
@@ -848,7 +854,8 @@ async function restoreDatabaseBackup(filename) {
           order.phone ?? "",
           order.shipping_info ?? order.shippingInfo ?? "",
           order.line_name ?? order.lineName ?? "",
-          normalizeOrderStatus(order.status ?? order.orderStatus),
+          normalizedStatus,
+          stockDeducted,
           order.total_amount ?? order.totalAmount ?? 0,
           order.created_by,
           order.created_at,
@@ -1134,6 +1141,7 @@ async function orderById(client, id) {
         orders.shipping_info,
         orders.line_name,
         orders.status,
+        orders.stock_deducted,
         orders.total_amount::float AS total_amount,
         orders.created_by,
         orders.created_at,
@@ -1170,6 +1178,12 @@ async function orderById(client, id) {
   };
 }
 
+function orderStockDeducted(order) {
+  if (typeof order?.stock_deducted === "boolean") return order.stock_deducted;
+  if (typeof order?.stockDeducted === "boolean") return order.stockDeducted;
+  return normalizeOrderStatus(order?.status) !== "cancelled";
+}
+
 async function orderItemsByOrderId(client, orderId) {
   const { rows } = await client.query(
     `
@@ -1195,6 +1209,117 @@ async function salesByOrderId(client, orderId) {
     [orderId]
   );
   return rows;
+}
+
+async function orderContextById(client, orderId) {
+  const items = await orderItemsByOrderId(client, orderId);
+  const itemMap = new Map();
+  for (const item of items) {
+    itemMap.set(item.product_id, (itemMap.get(item.product_id) ?? 0) + Number(item.quantity));
+  }
+
+  const productIds = [...itemMap.keys()];
+  const productMap = new Map();
+  if (productIds.length > 0) {
+    const { rows } = await client.query(
+      `
+        SELECT id, name, series, rarity, condition, product_type, grading_company, grade, cert_number, unit, cards_per_unit, package_spec, cost::text, average_cost::text, price::text, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at
+        FROM products
+        WHERE id = ANY($1)
+        ORDER BY id
+        FOR UPDATE
+      `,
+      [productIds]
+    );
+    if (rows.length !== productIds.length) {
+      return null;
+    }
+    for (const product of rows) {
+      productMap.set(product.id, product);
+    }
+  }
+
+  const sales = await salesByOrderId(client, orderId);
+  return { items, itemMap, productMap, sales };
+}
+
+async function deductOrderStock(client, request, orderId, itemMap, productMap, note = "建立訂單扣除庫存") {
+  const afterProducts = [];
+  for (const [productId, quantity] of itemMap.entries()) {
+    const product = productMap.get(productId);
+    if (!product) continue;
+    const stockBefore = Number(product.stock);
+    const stockAfter = stockBefore - Number(quantity);
+    await client.query("UPDATE products SET stock = $1, updated_at = NOW() WHERE id = $2", [stockAfter, productId]);
+    const afterProduct = await productById(client, productId);
+    afterProducts.push(afterProduct);
+    productMap.set(productId, afterProduct);
+    await writeInventoryLog(client, request, productId, "order_created", -Number(quantity), stockBefore, stockAfter, "order", orderId, note);
+  }
+  return afterProducts;
+}
+
+async function restoreOrderStock(client, request, orderId, itemMap, productMap, note = "訂單取消回補庫存") {
+  const afterProducts = [];
+  for (const [productId, quantity] of itemMap.entries()) {
+    const product = productMap.get(productId);
+    if (!product) continue;
+    const stockBefore = Number(product.stock);
+    const stockAfter = stockBefore + Number(quantity);
+    await client.query("UPDATE products SET stock = $1, updated_at = NOW() WHERE id = $2", [stockAfter, productId]);
+    const afterProduct = await productById(client, productId);
+    afterProducts.push(afterProduct);
+    productMap.set(productId, afterProduct);
+    await writeInventoryLog(client, request, productId, "order_cancelled", Number(quantity), stockBefore, stockAfter, "order", orderId, note);
+  }
+  return afterProducts;
+}
+
+async function syncOrderSalesToStatus(client, request, orderId, order, context, nextStatus) {
+  const { items, itemMap, productMap, sales } = context;
+  const activeSalesByProduct = new Map();
+  const latestSalesByProduct = new Map();
+
+  for (const sale of sales) {
+    latestSalesByProduct.set(sale.product_id, sale);
+    if (!sale.voided_at) {
+      activeSalesByProduct.set(sale.product_id, sale);
+    }
+  }
+
+  if (nextStatus === "completed") {
+    for (const [productId, quantity] of itemMap.entries()) {
+      if (activeSalesByProduct.has(productId)) continue;
+      const latestSale = latestSalesByProduct.get(productId);
+      if (latestSale?.voided_at) {
+        await client.query("UPDATE sales SET voided_at = NULL, voided_by = NULL WHERE id = $1", [latestSale.id]);
+        continue;
+      }
+
+      const item = items.find((currentItem) => currentItem.product_id === productId);
+      const product = productMap.get(productId);
+      if (!item || !product) continue;
+      const unitPrice = Number(item.unit_price ?? product.price);
+      const total = unitPrice * Number(quantity);
+      await client.query(
+        `
+          INSERT INTO sales (product_id, user_id, order_id, quantity, sale_unit, cards_per_unit, unit_price, total, sold_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_DATE)
+        `,
+        [productId, request.user.id, orderId, Number(quantity), product.unit, product.cards_per_unit, unitPrice, total]
+      );
+    }
+  } else {
+    await client.query(
+      `
+        UPDATE sales
+        SET voided_at = COALESCE(voided_at, NOW()),
+            voided_by = COALESCE(voided_by, $1)
+        WHERE order_id = $2 AND voided_at IS NULL
+      `,
+      [request.user.id, orderId]
+    );
+  }
 }
 
 async function recalculateAverageCost(client, productId) {
@@ -1318,16 +1443,22 @@ async function restoreSaleSnapshot(client, sale) {
 
 async function restoreOrderSnapshot(client, order) {
   const normalizedStatus = normalizeOrderStatus(order.status ?? order.orderStatus);
+  const stockDeducted = typeof order.stock_deducted === "boolean"
+    ? order.stock_deducted
+    : typeof order.stockDeducted === "boolean"
+      ? order.stockDeducted
+      : normalizedStatus !== "cancelled";
   await client.query(
     `
-      INSERT INTO orders (id, customer_name, phone, shipping_info, line_name, status, total_amount, created_by, created_at, updated_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7::numeric, $8, COALESCE($9::timestamptz, NOW()), COALESCE($10::timestamptz, NOW()))
+      INSERT INTO orders (id, customer_name, phone, shipping_info, line_name, status, stock_deducted, total_amount, created_by, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8::numeric, $9, COALESCE($10::timestamptz, NOW()), COALESCE($11::timestamptz, NOW()))
       ON CONFLICT (id) DO UPDATE SET
         customer_name = EXCLUDED.customer_name,
         phone = EXCLUDED.phone,
         shipping_info = EXCLUDED.shipping_info,
         line_name = EXCLUDED.line_name,
         status = EXCLUDED.status,
+        stock_deducted = EXCLUDED.stock_deducted,
         total_amount = EXCLUDED.total_amount,
         created_by = EXCLUDED.created_by,
         updated_at = NOW()
@@ -1339,6 +1470,7 @@ async function restoreOrderSnapshot(client, order) {
       order.shipping_info ?? order.shippingInfo ?? "",
       order.line_name ?? order.lineName ?? "",
       normalizedStatus,
+      stockDeducted,
       order.total_amount ?? order.totalAmount ?? 0,
       order.created_by ?? order.createdBy ?? null,
       order.created_at,
@@ -2469,6 +2601,7 @@ app.get("/api/orders", currentUser, async (request, response, next) => {
           orders.shipping_info,
           orders.line_name,
           orders.status,
+          orders.stock_deducted,
           orders.total_amount::float AS total_amount,
           orders.created_by,
           orders.created_at,
@@ -2566,11 +2699,11 @@ app.post("/api/orders", currentUser, async (request, response, next) => {
 
     const insertedOrder = await client.query(
       `
-        INSERT INTO orders (customer_name, phone, shipping_info, line_name, status, total_amount, created_by)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        RETURNING id, customer_name, phone, shipping_info, line_name, status, total_amount::float AS total_amount, created_by, created_at, updated_at
+        INSERT INTO orders (customer_name, phone, shipping_info, line_name, status, stock_deducted, total_amount, created_by)
+        VALUES ($1, $2, $3, $4, 'pending', TRUE, $5, $6)
+        RETURNING id, customer_name, phone, shipping_info, line_name, status, stock_deducted, total_amount::float AS total_amount, created_by, created_at, updated_at
       `,
-      [order.customerName, order.phone, order.shippingInfo, order.lineName, order.status, totalAmount, request.user.id]
+      [order.customerName, order.phone, order.shippingInfo, order.lineName, totalAmount, request.user.id]
     );
 
     const beforeProducts = productIds.map((productId) => ({ ...productMap.get(productId) }));
@@ -2630,7 +2763,7 @@ async function updateOrderStatus(request, response, next) {
   try {
     await client.query("BEGIN");
     const orderResult = await client.query(
-      "SELECT id, customer_name, phone, shipping_info, line_name, status, total_amount::float AS total_amount, created_by, created_at, updated_at FROM orders WHERE id = $1 FOR UPDATE",
+      "SELECT id, customer_name, phone, shipping_info, line_name, status, stock_deducted, total_amount::float AS total_amount, created_by, created_at, updated_at FROM orders WHERE id = $1 FOR UPDATE",
       [request.params.id]
     );
     const beforeOrder = orderResult.rows[0];
@@ -2641,90 +2774,44 @@ async function updateOrderStatus(request, response, next) {
 
     const beforeSnapshot = await orderById(client, beforeOrder.id);
     const currentStatus = normalizeOrderStatus(beforeOrder.status);
+    const currentStockDeducted = orderStockDeducted(beforeOrder);
     if (currentStatus === nextStatus) {
       await client.query("ROLLBACK");
       return response.json(rowsToCamel([beforeSnapshot])[0]);
     }
-    if (currentStatus !== "pending") {
-      await client.query("ROLLBACK");
-      return response.status(409).json({ message: "只有待處理訂單可以變更狀態" });
-    }
 
-    const items = await orderItemsByOrderId(client, beforeOrder.id);
-    const sales = await salesByOrderId(client, beforeOrder.id);
-    const itemMap = new Map();
-    for (const item of items) {
-      itemMap.set(item.product_id, (itemMap.get(item.product_id) ?? 0) + Number(item.quantity));
-    }
-
-    const beforeProducts = [];
-    const afterProducts = [];
-    const productIds = [...itemMap.keys()];
-    const productResult = await client.query(
-      `
-        SELECT id, name, series, rarity, condition, product_type, grading_company, grade, cert_number, unit, cards_per_unit, package_spec, cost::text, average_cost::text, price::text, stock, low_stock_threshold, notes, deleted_at, deleted_by, created_at, updated_at
-        FROM products
-        WHERE id = ANY($1)
-        ORDER BY id
-        FOR UPDATE
-      `,
-      [productIds]
-    );
-    const productMap = new Map(productResult.rows.map((product) => [product.id, product]));
-    if (productMap.size !== productIds.length) {
+    const context = await orderContextById(client, beforeOrder.id);
+    if (!context) {
       await client.query("ROLLBACK");
       return response.status(404).json({ message: "商品不存在" });
     }
+    const { items, itemMap, productMap } = context;
+    const beforeProducts = [...productMap.values()].map((product) => ({ ...product }));
+    let afterProducts = [];
+    let nextStockDeducted = currentStockDeducted;
 
-    for (const productId of productIds) {
-      const product = productMap.get(productId);
-      beforeProducts.push({ ...product });
-    }
-
-    if (nextStatus === "completed") {
-      for (const productId of productIds) {
-        const product = productMap.get(productId);
-        const quantity = itemMap.get(productId);
-        const activeSales = sales.filter((sale) => sale.product_id === productId && !sale.voided_at);
-        if (activeSales.length > 0) continue;
-        const item = items.find((currentItem) => currentItem.product_id === productId);
-        const total = Number(item?.unit_price ?? product.price) * quantity;
-        await client.query(
-          `
-            INSERT INTO sales (product_id, user_id, order_id, quantity, sale_unit, cards_per_unit, unit_price, total, sold_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_DATE)
-            RETURNING id
-          `,
-          [productId, request.user.id, beforeOrder.id, quantity, product.unit, product.cards_per_unit, Number(item?.unit_price ?? product.price), total]
-        );
+    if (nextStatus === "cancelled") {
+      if (currentStockDeducted) {
+        afterProducts = await restoreOrderStock(client, request, beforeOrder.id, itemMap, productMap, "訂單取消回補庫存");
+        nextStockDeducted = false;
       }
+      await syncOrderSalesToStatus(client, request, beforeOrder.id, beforeSnapshot, context, "cancelled");
+    } else if (nextStatus === "completed") {
+      if (!currentStockDeducted) {
+        afterProducts = await deductOrderStock(client, request, beforeOrder.id, itemMap, productMap, "訂單重新啟用時扣除庫存");
+        nextStockDeducted = true;
+      }
+      await syncOrderSalesToStatus(client, request, beforeOrder.id, beforeSnapshot, context, "completed");
       await writeInventoryLog(client, request, null, "order_completed", 0, 0, 0, "order", beforeOrder.id, "訂單已完成");
-    } else if (nextStatus === "cancelled") {
-      for (const productId of productIds) {
-        const product = productMap.get(productId);
-        const quantity = itemMap.get(productId);
-        const stockBefore = product.stock;
-        const stockAfter = stockBefore + quantity;
-        await client.query("UPDATE products SET stock = $1, updated_at = NOW() WHERE id = $2", [stockAfter, productId]);
-        const afterProduct = await productById(client, productId);
-        productMap.set(productId, afterProduct);
-        afterProducts.push(afterProduct);
-        await writeInventoryLog(
-          client,
-          request,
-          productId,
-          "order_cancelled",
-          quantity,
-          stockBefore,
-          stockAfter,
-          "order",
-          beforeOrder.id,
-          "訂單取消回補庫存"
-        );
+    } else if (nextStatus === "pending") {
+      if (!currentStockDeducted) {
+        afterProducts = await deductOrderStock(client, request, beforeOrder.id, itemMap, productMap, "訂單回到待處理時扣除庫存");
+        nextStockDeducted = true;
       }
+      await syncOrderSalesToStatus(client, request, beforeOrder.id, beforeSnapshot, context, "pending");
     }
 
-    await client.query("UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2", [nextStatus, beforeOrder.id]);
+    await client.query("UPDATE orders SET status = $1, stock_deducted = $2, updated_at = NOW() WHERE id = $3", [nextStatus, nextStockDeducted, beforeOrder.id]);
     const afterOrder = await orderById(client, beforeOrder.id);
     await writeAuditLog(
       client,
@@ -2764,6 +2851,7 @@ app.get("/api/orders/:id", currentUser, async (request, response, next) => {
           orders.shipping_info,
           orders.line_name,
           orders.status,
+          orders.stock_deducted,
           orders.total_amount::float AS total_amount,
           orders.created_by,
           orders.created_at,
@@ -2945,57 +3033,46 @@ app.post("/api/undo", currentUser, async (request, response, next) => {
         if (orderId) {
           const currentOrder = await orderById(client, orderId);
           if (currentOrder) {
-            const items = await orderItemsByOrderId(client, orderId);
-            for (const item of items) {
-              const productResult = await client.query("SELECT id, stock FROM products WHERE id = $1 FOR UPDATE", [item.product_id]);
-              const product = productResult.rows[0];
-              if (!product) continue;
-              const stockAfter = product.stock + Number(item.quantity);
-              await client.query("UPDATE products SET stock = $1, updated_at = NOW() WHERE id = $2", [stockAfter, item.product_id]);
-              await writeInventoryLog(
-                client,
-                request,
-                item.product_id,
-                "cancel_sale",
-                Number(item.quantity),
-                product.stock,
-                stockAfter,
-                "order",
-                orderId,
-                "還原建立訂單補回庫存"
-              );
+            const context = await orderContextById(client, orderId);
+            if (context) {
+              const currentStockDeducted = orderStockDeducted(currentOrder);
+              if (currentStockDeducted) {
+                await restoreOrderStock(client, request, orderId, context.itemMap, context.productMap, "還原建立訂單補回庫存");
+              }
+              await syncOrderSalesToStatus(client, request, orderId, currentOrder, context, "cancelled");
+              await client.query("UPDATE orders SET status = 'cancelled', stock_deducted = FALSE, updated_at = NOW() WHERE id = $1", [orderId]);
             }
-            await client.query("UPDATE orders SET status = 'cancelled', updated_at = NOW() WHERE id = $1", [orderId]);
           }
         }
       } else if (log.action_type === "update") {
         const orderId = after.order?.id ?? before.order?.id ?? after.id ?? before.id;
         if (orderId) {
           const currentOrder = await orderById(client, orderId);
-          if (currentOrder && normalizeOrderStatus(before.order?.status) === "pending") {
-            const items = await orderItemsByOrderId(client, orderId);
-            if (normalizeOrderStatus(currentOrder.status) === "cancelled") {
-              for (const item of items) {
-                const productResult = await client.query("SELECT id, stock FROM products WHERE id = $1 FOR UPDATE", [item.product_id]);
-                const product = productResult.rows[0];
-                if (!product) continue;
-                const stockAfter = product.stock - Number(item.quantity);
-                await client.query("UPDATE products SET stock = $1, updated_at = NOW() WHERE id = $2", [stockAfter, item.product_id]);
-                await writeInventoryLog(
-                  client,
-                  request,
-                  item.product_id,
-                  "sale",
-                  -Number(item.quantity),
-                  product.stock,
-                  stockAfter,
-                  "order",
-                  orderId,
-                  "還原訂單取消前的扣庫存"
-                );
+          const targetStatus = normalizeOrderStatus(before.order?.status ?? before.status);
+          if (currentOrder && orderStatuses.has(targetStatus)) {
+            const context = await orderContextById(client, orderId);
+            if (context) {
+              const currentStockDeducted = orderStockDeducted(currentOrder);
+              if (targetStatus === "cancelled") {
+                if (currentStockDeducted) {
+                  await restoreOrderStock(client, request, orderId, context.itemMap, context.productMap, "還原訂單狀態變更補回庫存");
+                }
+                await syncOrderSalesToStatus(client, request, orderId, currentOrder, context, "cancelled");
+                await client.query("UPDATE orders SET status = 'cancelled', stock_deducted = FALSE, updated_at = NOW() WHERE id = $1", [orderId]);
+              } else if (targetStatus === "completed") {
+                if (!currentStockDeducted) {
+                  await deductOrderStock(client, request, orderId, context.itemMap, context.productMap, "還原訂單狀態變更扣除庫存");
+                }
+                await syncOrderSalesToStatus(client, request, orderId, currentOrder, context, "completed");
+                await client.query("UPDATE orders SET status = 'completed', stock_deducted = TRUE, updated_at = NOW() WHERE id = $1", [orderId]);
+              } else {
+                if (!currentStockDeducted) {
+                  await deductOrderStock(client, request, orderId, context.itemMap, context.productMap, "還原訂單狀態變更扣除庫存");
+                }
+                await syncOrderSalesToStatus(client, request, orderId, currentOrder, context, "pending");
+                await client.query("UPDATE orders SET status = 'pending', stock_deducted = TRUE, updated_at = NOW() WHERE id = $1", [orderId]);
               }
             }
-            await client.query("UPDATE orders SET status = 'pending', updated_at = NOW() WHERE id = $1", [orderId]);
           }
         }
       }

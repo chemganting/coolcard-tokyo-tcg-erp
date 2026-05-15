@@ -195,6 +195,7 @@ export async function initDb() {
         shipping_info TEXT NOT NULL DEFAULT '',
         line_name TEXT NOT NULL DEFAULT '',
         status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'completed', 'cancelled')),
+        stock_deducted BOOLEAN NOT NULL DEFAULT TRUE,
         total_amount NUMERIC NOT NULL DEFAULT 0,
         created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -268,6 +269,7 @@ export async function initDb() {
     await client.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_info TEXT NOT NULL DEFAULT ''");
     await client.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS line_name TEXT NOT NULL DEFAULT ''");
     await client.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending'");
+    await client.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS stock_deducted BOOLEAN NOT NULL DEFAULT TRUE");
     await client.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS total_amount NUMERIC NOT NULL DEFAULT 0");
     await client.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS created_by INTEGER REFERENCES users(id) ON DELETE SET NULL");
     await client.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()");
@@ -299,6 +301,7 @@ export async function initDb() {
     await client.query("UPDATE orders SET status = 'pending' WHERE status IS NULL OR status = '' OR status IN ('待付款', '已付款', '待出貨', '待處理', 'pending')");
     await client.query("UPDATE orders SET status = 'completed' WHERE status IN ('已出貨', '已完成', 'completed', 'done')");
     await client.query("UPDATE orders SET status = 'cancelled' WHERE status IN ('已取消', 'cancelled', 'canceled')");
+    await client.query("UPDATE orders SET stock_deducted = CASE WHEN status = 'cancelled' THEN FALSE ELSE TRUE END WHERE stock_deducted IS DISTINCT FROM CASE WHEN status = 'cancelled' THEN FALSE ELSE TRUE END");
     await client.query("UPDATE sales SET order_id = NULL WHERE order_id IS NULL");
 
     await migrateLegacyPassword(client);
