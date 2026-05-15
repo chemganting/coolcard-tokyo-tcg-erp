@@ -1531,6 +1531,12 @@ function App() {
     );
   };
 
+  const clearCustomerForm = () => {
+    setOrderForm(emptyOrderForm);
+    setCustomerNameQuery("");
+    setCustomerSuggestions([]);
+  };
+
   const selectCustomerProfile = (profile) => {
     setOrderForm({
       customerName: profile.customerName ?? "",
@@ -1539,12 +1545,6 @@ function App() {
       lineName: profile.lineName ?? ""
     });
     setCustomerNameQuery(profile.customerName ?? "");
-    setCustomerSuggestions([]);
-  };
-
-  const resetOrderForm = () => {
-    setOrderForm(emptyOrderForm);
-    setCustomerNameQuery("");
     setCustomerSuggestions([]);
   };
 
@@ -1609,7 +1609,7 @@ function App() {
       setSelectedOrderProductId(null);
       setSelectedOrderQuantity(1);
       setOrderProductSearch("");
-      resetOrderForm();
+      clearCustomerForm();
       setAutoSaveStatus("已自動儲存");
       await refreshProductsData();
       await refreshOrdersData({ includeSales: false });
@@ -1945,7 +1945,7 @@ function App() {
       setSelectedOrderProductId(null);
       setSelectedOrderQuantity(1);
       setOrderProductSearch("");
-      resetOrderForm();
+      clearCustomerForm();
       await load();
       window.alert(`測試資料已清除，執行前備份已建立：${result.backup?.filename ?? "已建立"}`);
     } catch (err) {
@@ -3046,7 +3046,7 @@ function App() {
                         客戶名稱
                         <TextInput
                           value={orderForm.customerName}
-                          autoComplete="off"
+                          autoComplete="new-password"
                           onChange={(e) => {
                             const value = e.target.value;
                             setOrderForm({ ...orderForm, customerName: value });
@@ -3058,15 +3058,15 @@ function App() {
                       <CustomerProfileSuggestions profiles={customerSuggestions} onSelect={selectCustomerProfile} />
                       <label className="grid gap-1 text-sm font-medium text-slate-600">
                         電話
-                        <TextInput value={orderForm.phone} autoComplete="off" onChange={(e) => setOrderForm({ ...orderForm, phone: e.target.value })} placeholder="聯絡電話" />
+                        <TextInput value={orderForm.phone} autoComplete="new-password" onChange={(e) => setOrderForm({ ...orderForm, phone: e.target.value })} placeholder="聯絡電話" />
                       </label>
                       <label className="grid gap-1 text-sm font-medium text-slate-600">
                         寄件資料（7-11 門市）
-                        <TextArea value={orderForm.shippingInfo} autoComplete="off" onChange={(e) => setOrderForm({ ...orderForm, shippingInfo: e.target.value })} placeholder="門市名稱 / 代碼 / 收件資訊" />
+                        <TextArea value={orderForm.shippingInfo} autoComplete="new-password" onChange={(e) => setOrderForm({ ...orderForm, shippingInfo: e.target.value })} placeholder="門市名稱 / 代碼 / 收件資訊" />
                       </label>
                       <label className="grid gap-1 text-sm font-medium text-slate-600">
                         LINE 名稱
-                        <TextInput value={orderForm.lineName} autoComplete="off" onChange={(e) => setOrderForm({ ...orderForm, lineName: e.target.value })} placeholder="LINE 顯示名稱" />
+                        <TextInput value={orderForm.lineName} autoComplete="new-password" onChange={(e) => setOrderForm({ ...orderForm, lineName: e.target.value })} placeholder="LINE 顯示名稱" />
                       </label>
                     </div>
                     <div className="grid gap-2 border-t border-slate-200 pt-4">
@@ -3222,7 +3222,7 @@ function App() {
                         客戶名稱
                         <TextInput
                           value={orderForm.customerName}
-                          autoComplete="off"
+                          autoComplete="new-password"
                           onChange={(e) => {
                             const value = e.target.value;
                             setOrderForm({ ...orderForm, customerName: value });
@@ -3234,15 +3234,15 @@ function App() {
                       <CustomerProfileSuggestions profiles={customerSuggestions} onSelect={selectCustomerProfile} />
                       <label className="grid gap-1 text-sm font-medium text-slate-600">
                         電話
-                        <TextInput value={orderForm.phone} autoComplete="off" onChange={(e) => setOrderForm({ ...orderForm, phone: e.target.value })} placeholder="聯絡電話" />
+                        <TextInput value={orderForm.phone} autoComplete="new-password" onChange={(e) => setOrderForm({ ...orderForm, phone: e.target.value })} placeholder="聯絡電話" />
                       </label>
                       <label className="grid gap-1 text-sm font-medium text-slate-600">
                         寄件資料（7-11 門市）
-                        <TextArea value={orderForm.shippingInfo} autoComplete="off" onChange={(e) => setOrderForm({ ...orderForm, shippingInfo: e.target.value })} placeholder="門市名稱 / 代碼 / 收件資訊" />
+                        <TextArea value={orderForm.shippingInfo} autoComplete="new-password" onChange={(e) => setOrderForm({ ...orderForm, shippingInfo: e.target.value })} placeholder="門市名稱 / 代碼 / 收件資訊" />
                       </label>
                       <label className="grid gap-1 text-sm font-medium text-slate-600">
                         LINE 名稱
-                        <TextInput value={orderForm.lineName} autoComplete="off" onChange={(e) => setOrderForm({ ...orderForm, lineName: e.target.value })} placeholder="LINE 顯示名稱" />
+                        <TextInput value={orderForm.lineName} autoComplete="new-password" onChange={(e) => setOrderForm({ ...orderForm, lineName: e.target.value })} placeholder="LINE 顯示名稱" />
                       </label>
                     </div>
                     <div className="grid gap-2 border-t border-slate-200 pt-4">
