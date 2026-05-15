@@ -278,8 +278,8 @@ export async function initDb() {
       UPDATE orders
       SET status = CASE
         WHEN status IN ('待處理', 'pending', 'Pending') THEN 'pending'
-        WHEN status IN ('已完成', 'completed', 'Completed') THEN 'completed'
-        WHEN status IN ('已取消', 'cancelled', 'canceled', 'Cancelled') THEN 'cancelled'
+        WHEN status IN ('已完成', 'completed', 'Complete', 'Completed') THEN 'completed'
+        WHEN status IN ('已取消', 'cancelled', 'canceled', 'Cancel', 'Cancelled') THEN 'cancelled'
         ELSE 'pending'
       END
     `);
