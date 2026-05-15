@@ -206,7 +206,7 @@ export async function initDb() {
         id SERIAL PRIMARY KEY,
         order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
         product_id INTEGER REFERENCES products(id) ON DELETE SET NULL,
-        product_name TEXT NOT NULL,
+        product_name TEXT NOT NULL DEFAULT '',
         product_series TEXT NOT NULL DEFAULT '',
         quantity INTEGER NOT NULL,
         unit_price NUMERIC NOT NULL,

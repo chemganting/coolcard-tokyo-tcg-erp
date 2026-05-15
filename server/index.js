@@ -1543,6 +1543,16 @@ async function restoreOrderSnapshot(client, order) {
 
   await client.query("DELETE FROM order_items WHERE order_id = $1", [order.id]);
   for (const item of order.items ?? []) {
+    const productName = String(item.product_name ?? item.productName ?? "");
+    const productSeries = String(item.product_series ?? item.productSeries ?? "");
+    console.log("[order-flow] restore order_items payload", {
+      orderId: order.id,
+      productId: item.product_id ?? item.productId ?? null,
+      product_name: productName,
+      product_series: productSeries,
+      quantity: item.quantity,
+      price: item.unit_price ?? item.unitPrice ?? 0
+    });
     await client.query(
       `
         INSERT INTO order_items (order_id, product_id, product_name, product_series, quantity, unit_price, subtotal, created_at)
@@ -1551,8 +1561,8 @@ async function restoreOrderSnapshot(client, order) {
       [
         order.id,
         item.product_id ?? item.productId ?? null,
-        item.product_name ?? item.productName ?? "",
-        item.product_series ?? item.productSeries ?? "",
+        productName,
+        productSeries,
         item.quantity,
         item.unit_price ?? item.unitPrice ?? 0,
         item.subtotal ?? 0,
@@ -2839,13 +2849,23 @@ app.post("/api/orders", currentUser, async (request, response, next) => {
       const quantity = groupedItems.get(productId);
       const unitPrice = Number(product.price);
       const subtotal = unitPrice * quantity;
+      const productName = String(product.name ?? product.productName ?? "");
+      const productSeries = String(product.series ?? product.productSeries ?? "");
+      console.log("[order-flow] insert order_items payload", {
+        orderId: insertedOrder.rows[0].id,
+        productId,
+        product_name: productName,
+        product_series: productSeries,
+        quantity,
+        price: unitPrice
+      });
       const item = await client.query(
         `
           INSERT INTO order_items (order_id, product_id, product_name, product_series, quantity, unit_price, subtotal)
           VALUES ($1, $2, $3, $4, $5, $6, $7)
           RETURNING id, order_id, product_id, product_name, product_series, quantity, unit_price::float AS unit_price, subtotal::float AS subtotal, created_at
         `,
-        [insertedOrder.rows[0].id, productId, product.name, product.series, quantity, unitPrice, subtotal]
+        [insertedOrder.rows[0].id, productId, productName, productSeries, quantity, unitPrice, subtotal]
       );
       insertedItems.push(item.rows[0]);
       console.log("[order-flow] create-order item inserted", {
