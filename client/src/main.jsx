@@ -1019,6 +1019,19 @@ function App() {
     }
   }, [products, purchaseForm.productId]);
 
+  useEffect(() => {
+    if (!selectedOrderProductId) return;
+    const selected = products.find((product) => product.id === selectedOrderProductId);
+    if (!selected || selected.stock <= 0) {
+      setSelectedOrderProductId(null);
+      setSelectedOrderQuantity(1);
+      return;
+    }
+    if (selectedOrderQuantity > selected.stock) {
+      setSelectedOrderQuantity(selected.stock);
+    }
+  }, [products, selectedOrderProductId, selectedOrderQuantity]);
+
   const selectedProduct = useMemo(
     () => products.find((product) => product.id === Number(saleForm.productId)),
     [products, saleForm.productId]
@@ -1398,6 +1411,7 @@ function App() {
         lineName: ""
       });
       setAutoSaveStatus("已自動儲存");
+      await refreshProductsData();
       await refreshOrdersData({ includeSales: false });
       window.alert("訂單已建立");
     } catch (err) {
@@ -1538,6 +1552,7 @@ function App() {
         body: JSON.stringify({ status })
       });
       setAutoSaveStatus("訂單狀態已更新");
+      await refreshProductsData();
       await refreshOrdersData({ includeSales: true });
     } catch (err) {
       setError(err.message);
