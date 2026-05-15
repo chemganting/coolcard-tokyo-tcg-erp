@@ -2703,6 +2703,12 @@ app.get("/api/orders", currentUser, async (request, response, next) => {
 app.post("/api/orders", currentUser, async (request, response, next) => {
   const order = orderPayload(request.body);
   if (!validateOrder(order)) {
+    console.error("[order-flow] create-order invalid payload", {
+      userId: request.user.id,
+      customerName: order.customerName,
+      itemCount: order.items.length,
+      items: order.items
+    });
     return response.status(400).json({ message: "訂單資料不完整或格式錯誤" });
   }
 
@@ -2726,6 +2732,7 @@ app.post("/api/orders", currentUser, async (request, response, next) => {
   }
   const productIds = [...groupedItems.keys()];
   if (productIds.length === 0) {
+    console.error("[order-flow] create-order empty items", { userId: request.user.id, order });
     return response.status(400).json({ message: "訂單至少需要一項商品" });
   }
 
@@ -2744,6 +2751,11 @@ app.post("/api/orders", currentUser, async (request, response, next) => {
     );
     if (productResult.rows.length !== productIds.length) {
       await client.query("ROLLBACK");
+      console.error("[order-flow] create-order product lookup mismatch", {
+        orderItems: order.items,
+        productIds,
+        foundProductIds: productResult.rows.map((product) => product.id)
+      });
       return response.status(404).json({ message: "商品不存在" });
     }
 
@@ -2752,10 +2764,12 @@ app.post("/api/orders", currentUser, async (request, response, next) => {
       const product = productMap.get(productId);
       if (!product) {
         await client.query("ROLLBACK");
+        console.error("[order-flow] create-order product missing from map", { orderId: null, productId, productIds });
         return response.status(404).json({ message: "商品不存在" });
       }
       if (product.deleted_at) {
         await client.query("ROLLBACK");
+        console.error("[order-flow] create-order product deleted", { productId, productName: product.name });
         return response.status(409).json({ message: `${product.name} 已刪除，無法建立訂單` });
       }
     }
@@ -2770,6 +2784,13 @@ app.post("/api/orders", currentUser, async (request, response, next) => {
       const quantity = groupedItems.get(productId);
       if (product.stock < quantity) {
         await client.query("ROLLBACK");
+        console.error("[order-flow] create-order insufficient stock", {
+          productId,
+          productName: product.name,
+          quantity,
+          stockBefore: product.stock,
+          rollbackReason: "stock不足"
+        });
         return response.status(409).json({ message: `${product.name} 庫存不足，無法建立訂單` });
       }
     }
@@ -2843,6 +2864,13 @@ app.post("/api/orders", currentUser, async (request, response, next) => {
     response.status(201).json({ id: insertedOrder.rows[0].id });
   } catch (error) {
     await client.query("ROLLBACK");
+    console.error("[order-flow] create-order failed", {
+      message: error.message,
+      code: error.code,
+      detail: error.detail,
+      hint: error.hint,
+      stack: error.stack
+    });
     next(error);
   } finally {
     client.release();
