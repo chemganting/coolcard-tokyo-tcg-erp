@@ -42,6 +42,13 @@ const allowedOrigins = (process.env.CLIENT_ORIGIN ?? "")
   .split(",")
   .map((origin) => origin.trim())
   .filter(Boolean);
+const runtimeCommitHash = process.env.RENDER_GIT_COMMIT
+  ?? process.env.VERCEL_GIT_COMMIT_SHA
+  ?? process.env.GITHUB_SHA
+  ?? process.env.COMMIT_SHA
+  ?? process.env.GIT_COMMIT
+  ?? "unknown";
+const appVersion = process.env.npm_package_version ?? "1.0.0";
 
 app.use(cors({
   origin(origin, callback) {
@@ -88,6 +95,28 @@ function requireAdmin(request, response, next) {
     return response.status(403).json({ message: "此操作需要管理員權限" });
   }
   next();
+}
+
+async function logRuntimeDiagnostics() {
+  try {
+    const { rows } = await query(
+      `
+        SELECT conname, pg_get_constraintdef(pg_constraint.oid) AS definition
+        FROM pg_constraint
+        WHERE conrelid = 'orders'::regclass
+          AND contype = 'c'
+        ORDER BY conname
+      `
+    );
+    const ordersStatusCheck = rows.find((row) => row.conname === "orders_status_check") ?? null;
+    console.log("[startup] app version:", appVersion);
+    console.log("[startup] commit hash:", runtimeCommitHash);
+    console.log("[startup] allowed order statuses:", [...orderStatuses].join(", "));
+    console.log("[startup] orders_status_check:", ordersStatusCheck?.definition ?? "not found");
+    console.log("[startup] orders check constraints:", rows.map((row) => `${row.conname}=${row.definition}`).join(" | ") || "none");
+  } catch (error) {
+    console.error("[startup] failed to read orders constraint metadata", error);
+  }
 }
 
 function productPayload(body) {
@@ -3277,6 +3306,7 @@ initDb()
   .then(() => {
     return ensureBackupDir();
   })
+  .then(() => logRuntimeDiagnostics())
   .then(() => {
     app.listen(port, "0.0.0.0", () => {
       console.log(`Coolcard Tokyo TCG ERP API listening on http://localhost:${port}`);
