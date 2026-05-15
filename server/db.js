@@ -298,9 +298,16 @@ export async function initDb() {
     await client.query("UPDATE orders SET phone = '' WHERE phone IS NULL");
     await client.query("UPDATE orders SET shipping_info = '' WHERE shipping_info IS NULL");
     await client.query("UPDATE orders SET line_name = '' WHERE line_name IS NULL");
-    await client.query("UPDATE orders SET status = 'pending' WHERE status IS NULL OR status = '' OR status IN ('待付款', '已付款', '待出貨', '待處理', 'pending')");
-    await client.query("UPDATE orders SET status = 'completed' WHERE status IN ('已出貨', '已完成', 'completed', 'done')");
-    await client.query("UPDATE orders SET status = 'cancelled' WHERE status IN ('已取消', 'cancelled', 'canceled')");
+    await client.query(`
+      UPDATE orders
+      SET status = CASE
+        WHEN status IS NULL OR btrim(status) = '' THEN 'pending'
+        WHEN btrim(status) IN ('待處理', '待出貨', 'pending') THEN 'pending'
+        WHEN btrim(status) IN ('已完成', '已出貨', 'completed', 'done') THEN 'completed'
+        WHEN btrim(status) IN ('已取消', 'cancelled', 'canceled') THEN 'cancelled'
+        ELSE 'pending'
+      END
+    `);
     await client.query("UPDATE orders SET stock_deducted = CASE WHEN status = 'cancelled' THEN FALSE ELSE TRUE END WHERE stock_deducted IS DISTINCT FROM CASE WHEN status = 'cancelled' THEN FALSE ELSE TRUE END");
     await client.query("UPDATE sales SET order_id = NULL WHERE order_id IS NULL");
 
