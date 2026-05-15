@@ -274,16 +274,20 @@ export async function initDb() {
     await client.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS created_by INTEGER REFERENCES users(id) ON DELETE SET NULL");
     await client.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()");
     await client.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()");
+    const { rows: legacyOrderStatusRows } = await client.query("SELECT DISTINCT status FROM orders ORDER BY status");
+    console.log("[migration] orders distinct status values:", legacyOrderStatusRows.map((row) => row.status).join(", ") || "none");
+    await client.query("ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_status_check");
+    await client.query("UPDATE orders SET status = TRIM(LOWER(COALESCE(status, '')))");
     await client.query(`
       UPDATE orders
       SET status = CASE
         WHEN status IN ('待處理', 'pending', 'Pending') THEN 'pending'
         WHEN status IN ('已完成', 'completed', 'Complete', 'Completed') THEN 'completed'
-        WHEN status IN ('已取消', 'cancelled', 'canceled', 'Cancel', 'Cancelled') THEN 'cancelled'
+        WHEN status IN ('已取消', 'cancelled', 'canceled', 'cancel', 'Cancel', 'Cancelled') THEN 'cancelled'
         ELSE 'pending'
       END
     `);
-    await client.query("ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_status_check");
+    await client.query("UPDATE orders SET status = 'pending' WHERE status NOT IN ('pending', 'completed', 'cancelled') OR status IS NULL");
     await client.query("ALTER TABLE orders ADD CONSTRAINT orders_status_check CHECK (status IN ('pending', 'completed', 'cancelled'))");
     await client.query("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE");
     await client.query("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS product_id INTEGER REFERENCES products(id) ON DELETE SET NULL");
