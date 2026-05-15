@@ -226,6 +226,15 @@ export async function initDb() {
       );
     `);
 
+    await client.query("CREATE INDEX IF NOT EXISTS products_deleted_at_created_at_idx ON products (deleted_at, created_at DESC, id DESC)");
+    await client.query("CREATE INDEX IF NOT EXISTS orders_status_created_at_idx ON orders (status, created_at DESC, id DESC)");
+    await client.query("CREATE INDEX IF NOT EXISTS order_items_order_id_idx ON order_items (order_id)");
+    await client.query("CREATE INDEX IF NOT EXISTS sales_order_id_idx ON sales (order_id)");
+    await client.query("CREATE INDEX IF NOT EXISTS sales_sold_at_idx ON sales (sold_at DESC, id DESC)");
+    await client.query("CREATE INDEX IF NOT EXISTS purchases_product_id_purchase_date_idx ON purchases (product_id, purchase_date DESC, id DESC)");
+    await client.query("CREATE INDEX IF NOT EXISTS purchases_purchase_date_idx ON purchases (purchase_date DESC, id DESC)");
+    await client.query("CREATE INDEX IF NOT EXISTS inventory_logs_created_at_idx ON inventory_logs (created_at DESC, id DESC)");
+
     await client.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT");
     await client.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT");
     await client.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE");

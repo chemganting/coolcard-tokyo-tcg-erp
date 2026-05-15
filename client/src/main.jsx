@@ -832,44 +832,146 @@ function App() {
       });
   }, [auth?.token]);
 
-  const load = async () => {
+  const normalizeOrderRows = (rows) => rows.map((order) => ({
+    ...order,
+    status: orderStatusKey(order.status)
+  }));
+
+  const load = async (options = {}) => {
     if (!auth?.token) return;
-    setLoading(true);
+    const scope = {
+      products: true,
+      deletedProducts: true,
+      purchases: true,
+      sales: true,
+      orders: true,
+      dashboard: true,
+      profitReport: true,
+      employees: true,
+      backups: true,
+      inventoryLogs: true,
+      blocking: true,
+      ...options
+    };
+    if (scope.blocking) setLoading(true);
     const saleQuery = `?from=${dateRange.from}&to=${dateRange.to}`;
     const purchaseQuery = new URLSearchParams(
       Object.fromEntries(Object.entries(purchaseFilters).filter(([, value]) => value))
     ).toString();
     try {
-      const [productRows, deletedProductRows, purchaseRows, saleRows, orderRows, dashboardRow, profitRow, employeeRows, backupRows, inventoryLogRows] = await Promise.all([
-        api("/products"),
-        isAdmin ? api("/products/deleted").catch(() => []) : Promise.resolve([]),
-        api(`/purchases${purchaseQuery ? `?${purchaseQuery}` : ""}`).catch(() => []),
-        api(`/sales${saleQuery}`),
-        api("/orders").catch(() => []),
-        api("/dashboard"),
-        api("/profit-report"),
-        isAdmin ? api("/users") : Promise.resolve([]),
-        isAdmin ? api("/backups").catch(() => []) : Promise.resolve([]),
-        api("/inventory-logs").catch(() => [])
-      ]);
-      const normalizeOrders = (rows) => rows.map((order) => ({
-        ...order,
-        status: orderStatusKey(order.status)
-      }));
-      setProducts(productRows);
-      setDeletedProducts(deletedProductRows);
-      setPurchases(purchaseRows);
-      setSales(saleRows);
-      setOrders(normalizeOrders(orderRows));
-      setDashboard(dashboardRow);
-      setProfitReport(profitRow);
-      setEmployees(employeeRows);
-      setBackups(backupRows);
-      setInventoryLogs(inventoryLogRows);
+      const requests = [];
+      if (scope.products) requests.push(["products", api("/products")]);
+      if (scope.deletedProducts) requests.push(["deletedProducts", isAdmin ? api("/products/deleted").catch(() => []) : Promise.resolve([])]);
+      if (scope.purchases) requests.push(["purchases", api(`/purchases${purchaseQuery ? `?${purchaseQuery}` : ""}`).catch(() => [])]);
+      if (scope.sales) requests.push(["sales", api(`/sales${saleQuery}`)]);
+      if (scope.orders) requests.push(["orders", api("/orders").catch(() => [])]);
+      if (scope.dashboard) requests.push(["dashboard", api("/dashboard")]);
+      if (scope.profitReport) requests.push(["profitReport", api("/profit-report")]);
+      if (scope.employees) requests.push(["employees", isAdmin ? api("/users") : Promise.resolve([])]);
+      if (scope.backups) requests.push(["backups", isAdmin ? api("/backups").catch(() => []) : Promise.resolve([])]);
+      if (scope.inventoryLogs) requests.push(["inventoryLogs", api("/inventory-logs").catch(() => [])]);
+
+      const resultRows = await Promise.all(requests.map(([, promise]) => promise));
+      const data = Object.fromEntries(requests.map(([key], index) => [key, resultRows[index]]));
+
+      if (scope.products) setProducts(data.products ?? []);
+      if (scope.deletedProducts) setDeletedProducts(data.deletedProducts ?? []);
+      if (scope.purchases) setPurchases(data.purchases ?? []);
+      if (scope.sales) setSales(data.sales ?? []);
+      if (scope.orders) setOrders(normalizeOrderRows(data.orders ?? []));
+      if (scope.dashboard) setDashboard(data.dashboard ?? null);
+      if (scope.profitReport) setProfitReport(data.profitReport ?? null);
+      if (scope.employees) setEmployees(data.employees ?? []);
+      if (scope.backups) setBackups(data.backups ?? []);
+      if (scope.inventoryLogs) setInventoryLogs(data.inventoryLogs ?? []);
     } finally {
-      setLoading(false);
+      if (scope.blocking) setLoading(false);
     }
   };
+
+  const refreshProductsData = async () => load({
+    products: true,
+    deletedProducts: isAdmin,
+    purchases: false,
+    sales: false,
+    orders: false,
+    dashboard: true,
+    profitReport: true,
+    employees: false,
+    backups: false,
+    inventoryLogs: true,
+    blocking: false
+  });
+
+  const refreshPurchasesData = async () => load({
+    products: true,
+    deletedProducts: false,
+    purchases: true,
+    sales: false,
+    orders: false,
+    dashboard: true,
+    profitReport: true,
+    employees: false,
+    backups: false,
+    inventoryLogs: true,
+    blocking: false
+  });
+
+  const refreshOrdersData = async ({ includeSales = false } = {}) => load({
+    products: true,
+    deletedProducts: false,
+    purchases: false,
+    sales: includeSales,
+    orders: true,
+    dashboard: true,
+    profitReport: true,
+    employees: false,
+    backups: false,
+    inventoryLogs: true,
+    blocking: false
+  });
+
+  const refreshSalesData = async () => load({
+    products: true,
+    deletedProducts: false,
+    purchases: false,
+    sales: true,
+    orders: false,
+    dashboard: true,
+    profitReport: true,
+    employees: false,
+    backups: false,
+    inventoryLogs: true,
+    blocking: false
+  });
+
+  const refreshEmployeesData = async () => load({
+    products: false,
+    deletedProducts: false,
+    purchases: false,
+    sales: false,
+    orders: false,
+    dashboard: false,
+    profitReport: false,
+    employees: true,
+    backups: false,
+    inventoryLogs: false,
+    blocking: false
+  });
+
+  const refreshBackupsData = async () => load({
+    products: false,
+    deletedProducts: false,
+    purchases: false,
+    sales: false,
+    orders: false,
+    dashboard: false,
+    profitReport: false,
+    employees: false,
+    backups: true,
+    inventoryLogs: false,
+    blocking: false
+  });
 
   const loadAuditLogs = async () => {
     if (!auth?.token) return;
@@ -1101,7 +1203,7 @@ function App() {
           })
         });
         setAutoSaveStatus("已自動儲存");
-        await load();
+        await refreshProductsData();
       } catch (err) {
         setAutoSaveStatus("自動儲存失敗");
         setError(err.message);
@@ -1135,7 +1237,7 @@ function App() {
           })
         });
         setAutoSaveStatus("已自動儲存");
-        await load();
+        await refreshEmployeesData();
       } catch (err) {
         setAutoSaveStatus("自動儲存失敗");
         setError(err.message);
@@ -1165,7 +1267,7 @@ function App() {
       setEditingId(null);
       productAutosaveReady.current = false;
       setAutoSaveStatus("已自動儲存");
-      await load();
+      await refreshProductsData();
     } catch (err) {
       setError(err.message);
     }
@@ -1200,7 +1302,7 @@ function App() {
     try {
       await api(`/products/${product.id}`, { method: "DELETE" });
       setAutoSaveStatus("已自動儲存");
-      await load();
+      await refreshProductsData();
     } catch (err) {
       setError(err.message);
     }
@@ -1211,7 +1313,7 @@ function App() {
     try {
       await api(`/products/${product.id}/restore`, { method: "PATCH", body: JSON.stringify({}) });
       setAutoSaveStatus("已還原商品");
-      await load();
+      await refreshProductsData();
       window.alert("商品已還原");
     } catch (err) {
       setError(err.message);
@@ -1235,7 +1337,7 @@ function App() {
       });
       setSaleForm((current) => ({ ...current, quantity: 1 }));
       setAutoSaveStatus("已自動儲存");
-      await load();
+      await refreshSalesData();
     } catch (err) {
       setError(err.message);
     }
@@ -1296,7 +1398,7 @@ function App() {
         lineName: ""
       });
       setAutoSaveStatus("已自動儲存");
-      await load();
+      await refreshOrdersData({ includeSales: false });
       window.alert("訂單已建立");
     } catch (err) {
       setError(err.message);
@@ -1312,7 +1414,7 @@ function App() {
         body: JSON.stringify({ csv: importCsv })
       });
       setImportCsv("");
-      await load();
+      await refreshProductsData();
       window.alert(`已匯入 ${result.imported} 筆商品`);
     } catch (err) {
       setError(err.message);
@@ -1385,7 +1487,7 @@ function App() {
       setPurchaseForm(emptyPurchase);
       setEditingPurchaseId(null);
       setAutoSaveStatus("已自動儲存");
-      await load();
+      await refreshPurchasesData();
       window.alert(editingPurchaseId ? "進貨單已更新" : "進貨單已建立");
     } catch (err) {
       setError(err.message);
@@ -1421,7 +1523,7 @@ function App() {
         body: JSON.stringify({ voidReason })
       });
       setAutoSaveStatus("已自動儲存");
-      await load();
+      await refreshPurchasesData();
       window.alert("進貨單已作廢");
     } catch (err) {
       setError(err.message);
@@ -1436,7 +1538,7 @@ function App() {
         body: JSON.stringify({ status })
       });
       setAutoSaveStatus("訂單狀態已更新");
-      await load();
+      await refreshOrdersData({ includeSales: status === "completed" });
     } catch (err) {
       setError(err.message);
     }
@@ -1447,7 +1549,7 @@ function App() {
     try {
       await api(`/sales/${sale.id}/void`, { method: "POST", body: JSON.stringify({}) });
       setAutoSaveStatus("已自動儲存");
-      await load();
+      await refreshSalesData();
     } catch (err) {
       setError(err.message);
     }
@@ -1467,7 +1569,7 @@ function App() {
       await api("/users", { method: "POST", body: JSON.stringify({ ...payload, password: employeeForm.password }) });
       setEmployeeForm(emptyEmployee);
       setAutoSaveStatus("已自動儲存");
-      await load();
+      await refreshEmployeesData();
       window.alert("員工帳號已建立");
     } catch (err) {
       setError(err.message);
@@ -1508,7 +1610,7 @@ function App() {
       });
       cancelEmployeeEdit();
       setAutoSaveStatus("已自動儲存");
-      await load();
+      await refreshEmployeesData();
       window.alert("員工資料已更新");
     } catch (err) {
       setError(err.message);
@@ -1537,7 +1639,7 @@ function App() {
         body: JSON.stringify({ isActive: !employee.isActive })
       });
       setAutoSaveStatus("已自動儲存");
-      await load();
+      await refreshEmployeesData();
     } catch (err) {
       setError(err.message);
     }
@@ -1549,7 +1651,7 @@ function App() {
     try {
       await api(`/users/${employee.id}`, { method: "DELETE" });
       setAutoSaveStatus("已自動儲存");
-      await load();
+      await refreshEmployeesData();
     } catch (err) {
       setError(err.message);
     }
@@ -1560,7 +1662,6 @@ function App() {
     setSyncingSheet(true);
     try {
       const result = await api("/reports/google-sync", { method: "POST", body: JSON.stringify({}) });
-      await load();
       window.alert("已同步到 Google 試算表");
       if (result.googleSheetUrl) window.open(result.googleSheetUrl, "_blank", "noopener,noreferrer");
     } catch (err) {
@@ -1574,7 +1675,7 @@ function App() {
     setError("");
     try {
       await api("/backups/create", { method: "POST", body: JSON.stringify({}) });
-      await load();
+      await refreshBackupsData();
       window.alert("資料庫備份已建立");
     } catch (err) {
       setError(err.message);
@@ -1602,7 +1703,7 @@ function App() {
     setError("");
     try {
       await api(`/backups/${encodeURIComponent(backup.filename)}`, { method: "DELETE" });
-      await load();
+      await refreshBackupsData();
     } catch (err) {
       setError(err.message);
     }
