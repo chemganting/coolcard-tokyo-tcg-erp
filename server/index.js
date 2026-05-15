@@ -2725,6 +2725,14 @@ app.post("/api/orders", currentUser, async (request, response, next) => {
       quantity: item.quantity
     }))
   });
+  console.log("[order-flow] create-order request body", JSON.stringify({
+    userId: request.user.id,
+    customerName: order.customerName,
+    phone: order.phone,
+    shippingInfo: order.shippingInfo,
+    lineName: order.lineName,
+    items: order.items
+  }));
 
   const groupedItems = new Map();
   for (const item of order.items) {
@@ -2767,6 +2775,12 @@ app.post("/api/orders", currentUser, async (request, response, next) => {
         console.error("[order-flow] create-order product missing from map", { orderId: null, productId, productIds });
         return response.status(404).json({ message: "商品不存在" });
       }
+      console.log("[order-flow] create-order product matched", {
+        requestProductId: productId,
+        databaseProductId: product.id,
+        productName: product.name,
+        stockBefore: product.stock
+      });
       if (product.deleted_at) {
         await client.query("ROLLBACK");
         console.error("[order-flow] create-order product deleted", { productId, productName: product.name });
@@ -2803,6 +2817,13 @@ app.post("/api/orders", currentUser, async (request, response, next) => {
       `,
       [order.customerName, order.phone, order.shippingInfo, order.lineName, totalAmount, request.user.id]
     );
+    console.log("[order-flow] create-order order inserted", {
+      orderId: insertedOrder.rows[0].id,
+      stockDeducted: insertedOrder.rows[0].stock_deducted,
+      totalAmount,
+      productIds,
+      quantities: productIds.map((productId) => groupedItems.get(productId))
+    });
 
     const beforeProducts = productIds.map((productId) => ({ ...productMap.get(productId) }));
     logOrderFlow("create-order-committed-insert", {
@@ -2827,6 +2848,14 @@ app.post("/api/orders", currentUser, async (request, response, next) => {
         [insertedOrder.rows[0].id, productId, product.name, product.series, quantity, unitPrice, subtotal]
       );
       insertedItems.push(item.rows[0]);
+      console.log("[order-flow] create-order item inserted", {
+        orderId: insertedOrder.rows[0].id,
+        requestProductId: productId,
+        databaseProductId: product.id,
+        quantity,
+        unitPrice,
+        subtotal
+      });
     }
 
     logOrderFlow("create-stock-deducted", {

@@ -1040,6 +1040,10 @@ function App() {
     () => products.find((product) => product.id === Number(purchaseForm.productId)),
     [products, purchaseForm.productId]
   );
+  const selectedOrderProduct = useMemo(
+    () => products.find((product) => product.id === selectedOrderProductId) ?? null,
+    [products, selectedOrderProductId]
+  );
   const purchaseTotalCost = Number(purchaseForm.quantity || 0) * Number(purchaseForm.unitCost || 0);
   const productUnitOptions = useMemo(() => ["全部", ...Array.from(new Set(products.map((product) => product.unit).filter(Boolean)))], [products]);
   const filteredProducts = useMemo(() => {
@@ -1390,6 +1394,18 @@ function App() {
     if (orderItems.length === 0) return;
     setError("");
     try {
+      console.log("[quick-order] createOrder payload", {
+        selectedOrderProductId,
+        selectedOrderProductIdResolved: selectedOrderProduct?.id ?? null,
+        selectedOrderProductName: selectedOrderProduct?.name ?? null,
+        selectedOrderQuantity,
+        items: orderItems.map((item) => ({
+          productId: item.product.id,
+          productName: item.product.name,
+          quantity: item.quantity,
+          stock: item.product.stock
+        }))
+      });
       await api("/orders", {
         method: "POST",
         body: JSON.stringify({
