@@ -2707,20 +2707,13 @@ app.post("/api/orders", currentUser, async (request, response, next) => {
     );
 
     const beforeProducts = productIds.map((productId) => ({ ...productMap.get(productId) }));
+    const afterProducts = await deductOrderStock(client, request, insertedOrder.rows[0].id, groupedItems, productMap, "建立訂單扣除庫存");
     const insertedItems = [];
-
-    const afterProducts = [];
     for (const productId of productIds) {
       const product = productMap.get(productId);
       const quantity = groupedItems.get(productId);
       const unitPrice = Number(product.price);
       const subtotal = unitPrice * quantity;
-      const stockBefore = product.stock;
-      const stockAfter = stockBefore - quantity;
-      await client.query("UPDATE products SET stock = $1, updated_at = NOW() WHERE id = $2", [stockAfter, productId]);
-      const afterProduct = await productById(client, productId);
-      afterProducts.push(afterProduct);
-      productMap.set(productId, afterProduct);
       const item = await client.query(
         `
           INSERT INTO order_items (order_id, product_id, product_name, product_series, quantity, unit_price, subtotal)
@@ -2730,7 +2723,6 @@ app.post("/api/orders", currentUser, async (request, response, next) => {
         [insertedOrder.rows[0].id, productId, product.name, product.series, quantity, unitPrice, subtotal]
       );
       insertedItems.push(item.rows[0]);
-      await writeInventoryLog(client, request, productId, "order_created", -quantity, stockBefore, stockAfter, "order", insertedOrder.rows[0].id, "建立訂單扣除庫存");
     }
 
     const orderRow = await orderById(client, insertedOrder.rows[0].id);
