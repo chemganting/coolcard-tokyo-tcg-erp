@@ -1283,10 +1283,25 @@ async function deductOrderStock(client, request, orderId, itemMap, productMap, n
     if (!product) continue;
     const stockBefore = Number(product.stock);
     const stockAfter = stockBefore - Number(quantity);
-    await client.query("UPDATE products SET stock = $1, updated_at = NOW() WHERE id = $2", [stockAfter, productId]);
-    const afterProduct = await productById(client, productId);
+    const updateResult = await client.query(
+      "UPDATE products SET stock = $1, updated_at = NOW() WHERE id = $2 RETURNING id, stock",
+      [stockAfter, productId]
+    );
+    const afterProduct = updateResult.rows[0] ?? await productById(client, productId);
     afterProducts.push(afterProduct);
     productMap.set(productId, afterProduct);
+    logOrderFlow("stock-deducted", {
+      orderId,
+      productId,
+      quantity: Number(quantity),
+      stockBefore,
+      stockAfter,
+      rowCount: updateResult.rowCount,
+      stockDeducted: true
+    });
+    if (updateResult.rowCount === 0) {
+      console.error("[order-flow] stock update missed row", { orderId, productId, quantity, stockBefore, stockAfter });
+    }
     await writeInventoryLog(client, request, productId, "order_created", -Number(quantity), stockBefore, stockAfter, "order", orderId, note);
   }
   return afterProducts;
@@ -1299,10 +1314,25 @@ async function restoreOrderStock(client, request, orderId, itemMap, productMap, 
     if (!product) continue;
     const stockBefore = Number(product.stock);
     const stockAfter = stockBefore + Number(quantity);
-    await client.query("UPDATE products SET stock = $1, updated_at = NOW() WHERE id = $2", [stockAfter, productId]);
-    const afterProduct = await productById(client, productId);
+    const updateResult = await client.query(
+      "UPDATE products SET stock = $1, updated_at = NOW() WHERE id = $2 RETURNING id, stock",
+      [stockAfter, productId]
+    );
+    const afterProduct = updateResult.rows[0] ?? await productById(client, productId);
     afterProducts.push(afterProduct);
     productMap.set(productId, afterProduct);
+    logOrderFlow("stock-restored", {
+      orderId,
+      productId,
+      quantity: Number(quantity),
+      stockBefore,
+      stockAfter,
+      rowCount: updateResult.rowCount,
+      stockDeducted: false
+    });
+    if (updateResult.rowCount === 0) {
+      console.error("[order-flow] stock restore missed row", { orderId, productId, quantity, stockBefore, stockAfter });
+    }
     await writeInventoryLog(client, request, productId, "order_cancelled", Number(quantity), stockBefore, stockAfter, "order", orderId, note);
   }
   return afterProducts;
@@ -2754,6 +2784,12 @@ app.post("/api/orders", currentUser, async (request, response, next) => {
     );
 
     const beforeProducts = productIds.map((productId) => ({ ...productMap.get(productId) }));
+    logOrderFlow("create-order-committed-insert", {
+      orderId: insertedOrder.rows[0].id,
+      stockDeducted: insertedOrder.rows[0].stock_deducted,
+      productIds,
+      quantities: productIds.map((productId) => groupedItems.get(productId))
+    });
     const afterProducts = await deductOrderStock(client, request, insertedOrder.rows[0].id, groupedItems, productMap, "建立訂單扣除庫存");
     const insertedItems = [];
     for (const productId of productIds) {
