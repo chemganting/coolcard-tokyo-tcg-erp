@@ -24,7 +24,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const backupDir = process.env.BACKUP_DIR
   ? path.resolve(process.env.BACKUP_DIR)
   : path.join(__dirname, "backups");
-const backupTables = ["users", "products", "sales", "orders", "order_items", "audit_logs", "inventory_logs", "purchases"];
+const backupTables = ["users", "products", "sales", "orders", "order_items", "customer_profiles", "audit_logs", "inventory_logs", "purchases"];
 
 function publicUser(row) {
   const user = toCamel(row);
@@ -239,6 +239,124 @@ function orderStatusTone(status) {
   if (normalized === "completed") return "bg-emerald-50 text-emerald-700";
   if (normalized === "pending") return "bg-amber-50 text-amber-700";
   return "bg-rose-50 text-rose-700";
+}
+
+function normalizeCustomerValue(value) {
+  return String(value ?? "").trim().replace(/\s+/g, " ");
+}
+
+function normalizeCustomerPhone(value) {
+  return String(value ?? "").replace(/\D+/g, "");
+}
+
+function customerProfilePhoneKey(phone) {
+  const normalized = normalizeCustomerPhone(phone);
+  return normalized ? `phone:${normalized}` : null;
+}
+
+function customerProfileNameLineKey(customerName, lineName) {
+  const normalizedName = normalizeCustomerValue(customerName).toLowerCase();
+  const normalizedLine = normalizeCustomerValue(lineName).toLowerCase();
+  if (!normalizedName && !normalizedLine) return null;
+  return `name_line:${normalizedName}|${normalizedLine}`;
+}
+
+async function upsertCustomerProfile(client, profile) {
+  const customerName = normalizeCustomerValue(profile.customerName);
+  const phone = normalizeCustomerValue(profile.phone);
+  const lineName = normalizeCustomerValue(profile.lineName);
+  const shippingInfo = normalizeCustomerValue(profile.shippingInfo);
+  const lastOrderAt = profile.lastOrderAt ?? null;
+  const phoneKey = customerProfilePhoneKey(phone);
+  const nameLineKey = customerProfileNameLineKey(customerName, lineName);
+
+  if (!customerName && !phone && !lineName && !shippingInfo) return;
+
+  const lookupParams = [];
+  let lookupSql = `
+    SELECT id
+    FROM customer_profiles
+    WHERE FALSE
+  `;
+  if (phoneKey) {
+    lookupParams.push(phoneKey);
+    lookupSql += ` OR phone_key = $${lookupParams.length}`;
+  }
+  if (nameLineKey) {
+    lookupParams.push(nameLineKey);
+    lookupSql += ` OR name_line_key = $${lookupParams.length}`;
+  }
+  lookupSql += " ORDER BY updated_at DESC, id DESC LIMIT 1";
+
+  const { rows } = await client.query(lookupSql, lookupParams);
+  if (rows[0]) {
+    await client.query(
+      `
+        UPDATE customer_profiles
+        SET customer_name = $2,
+            phone = $3,
+            line_name = $4,
+            shipping_info = $5,
+            phone_key = $6,
+            name_line_key = $7,
+            last_order_at = GREATEST(COALESCE(last_order_at, $8::timestamptz), $8::timestamptz),
+            updated_at = NOW()
+        WHERE id = $1
+      `,
+      [
+        rows[0].id,
+        customerName,
+        phone,
+        lineName,
+        shippingInfo,
+        phoneKey,
+        nameLineKey,
+        lastOrderAt
+      ]
+    );
+    return;
+  }
+
+  await client.query(
+    `
+      INSERT INTO customer_profiles
+        (customer_name, phone, line_name, shipping_info, phone_key, name_line_key, last_order_at, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz, NOW(), NOW())
+    `,
+    [
+      customerName,
+      phone,
+      lineName,
+      shippingInfo,
+      phoneKey,
+      nameLineKey,
+      lastOrderAt
+    ]
+  );
+}
+
+async function rebuildCustomerProfilesFromOrders(client) {
+  const { rows } = await client.query(
+    `
+      SELECT customer_name, phone, shipping_info, line_name, created_at
+      FROM orders
+      WHERE COALESCE(customer_name, '') <> ''
+         OR COALESCE(phone, '') <> ''
+         OR COALESCE(line_name, '') <> ''
+         OR COALESCE(shipping_info, '') <> ''
+      ORDER BY created_at ASC, id ASC
+    `
+  );
+
+  for (const order of rows) {
+    await upsertCustomerProfile(client, {
+      customerName: order.customer_name,
+      phone: order.phone,
+      lineName: order.line_name,
+      shippingInfo: order.shipping_info,
+      lastOrderAt: order.created_at
+    });
+  }
 }
 
 function logOrderFlow(stage, payload) {
@@ -897,6 +1015,36 @@ async function restoreDatabaseBackup(filename) {
       );
     }
 
+    for (const profile of data.customer_profiles ?? data.customerProfiles ?? []) {
+      await client.query(
+        `
+          INSERT INTO customer_profiles (id, customer_name, phone, line_name, shipping_info, phone_key, name_line_key, last_order_at, created_at, updated_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8::timestamptz, NOW()), COALESCE($9::timestamptz, NOW()), COALESCE($10::timestamptz, NOW()))
+          ON CONFLICT (id) DO UPDATE SET
+            customer_name = EXCLUDED.customer_name,
+            phone = EXCLUDED.phone,
+            line_name = EXCLUDED.line_name,
+            shipping_info = EXCLUDED.shipping_info,
+            phone_key = EXCLUDED.phone_key,
+            name_line_key = EXCLUDED.name_line_key,
+            last_order_at = EXCLUDED.last_order_at,
+            updated_at = NOW()
+        `,
+        [
+          profile.id,
+          profile.customer_name ?? profile.customerName ?? "",
+          profile.phone ?? "",
+          profile.line_name ?? profile.lineName ?? "",
+          profile.shipping_info ?? profile.shippingInfo ?? "",
+          profile.phone_key ?? profile.phoneKey ?? null,
+          profile.name_line_key ?? profile.nameLineKey ?? null,
+          profile.last_order_at ?? profile.lastOrderAt,
+          profile.created_at,
+          profile.updated_at
+        ]
+      );
+    }
+
     for (const item of data.order_items ?? data.orderItems ?? []) {
       await client.query(
         `
@@ -916,6 +1064,8 @@ async function restoreDatabaseBackup(filename) {
         ]
       );
     }
+
+    await rebuildCustomerProfilesFromOrders(client);
 
     for (const sale of data.sales ?? []) {
       await client.query(
@@ -1061,7 +1211,7 @@ async function clearDemoData() {
   try {
     await client.query("BEGIN");
 
-    const tables = ["audit_logs", "purchases", "sales", "products"];
+    const tables = ["audit_logs", "purchases", "sales", "products", "customer_profiles"];
     if (await tableExists("inventory_logs")) tables.unshift("inventory_logs");
 
     await client.query(`TRUNCATE TABLE ${tables.join(", ")} RESTART IDENTITY CASCADE`);
@@ -2637,6 +2787,38 @@ async function voidSale(request, response, next) {
 app.post("/api/sales/:id/void", currentUser, requireAdmin, voidSale);
 app.delete("/api/sales/:id", currentUser, requireAdmin, voidSale);
 
+app.get("/api/customer-profiles/search", currentUser, async (request, response, next) => {
+  try {
+    const queryText = String(request.query.query ?? "").trim();
+    if (!queryText) return response.json([]);
+    const keyword = `%${queryText}%`;
+    const { rows } = await query(
+      `
+        SELECT
+          id,
+          customer_name,
+          phone,
+          line_name,
+          shipping_info,
+          last_order_at,
+          created_at,
+          updated_at
+        FROM customer_profiles
+        WHERE customer_name ILIKE $1
+           OR phone ILIKE $1
+           OR line_name ILIKE $1
+           OR shipping_info ILIKE $1
+        ORDER BY updated_at DESC, last_order_at DESC NULLS LAST, id DESC
+        LIMIT 10
+      `,
+      [keyword]
+    );
+    response.json(rowsToCamel(rows));
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/orders", currentUser, async (request, response, next) => {
   const params = [];
   const filters = [];
@@ -2877,6 +3059,14 @@ app.post("/api/orders", currentUser, async (request, response, next) => {
         subtotal
       });
     }
+
+    await upsertCustomerProfile(client, {
+      customerName: order.customerName,
+      phone: order.phone,
+      lineName: order.lineName,
+      shippingInfo: order.shippingInfo,
+      lastOrderAt: insertedOrder.rows[0].created_at
+    });
 
     logOrderFlow("create-stock-deducted", {
       orderId: insertedOrder.rows[0].id,

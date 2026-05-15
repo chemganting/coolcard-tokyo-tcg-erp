@@ -257,6 +257,48 @@ function OrderSummaryDisclosure({ order, expanded, onToggle }) {
   );
 }
 
+function customerProfileSummaryText(profile) {
+  const parts = [
+    profile.customerName,
+    profile.lineName ? `LINE ${profile.lineName}` : "",
+    profile.phone ? `電話 ${profile.phone}` : "",
+    profile.shippingInfo ? `7-11 ${profile.shippingInfo}` : ""
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(" · ") : "-";
+}
+
+function CustomerProfileSuggestions({ profiles, onSelect }) {
+  if (!Array.isArray(profiles) || profiles.length === 0) return null;
+  return (
+    <div className="grid gap-2 rounded-lg border border-slate-200 bg-white p-2 shadow-sm">
+      {profiles.map((profile) => (
+        <button
+          key={profile.id}
+          type="button"
+          className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-left text-sm transition hover:border-teal-300 hover:bg-teal-50"
+          title={customerProfileSummaryText(profile)}
+          onMouseDown={(event) => {
+            event.preventDefault();
+            onSelect(profile);
+          }}
+        >
+          <div className="flex flex-col gap-1">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 font-medium text-slate-950">
+              <span>{profile.customerName || "-"}</span>
+              {profile.lineName ? <span className="text-slate-500">LINE {profile.lineName}</span> : null}
+            </div>
+            <div className="text-slate-600">
+              <span>{profile.phone || "-"}</span>
+              <span className="mx-2 text-slate-400">·</span>
+              <span className="truncate">{profile.shippingInfo ? `7-11 ${profile.shippingInfo}` : "尚無門市資料"}</span>
+            </div>
+          </div>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function orderShippingSummary(order) {
   const data = parseShippingAssistantData(order);
   return [
@@ -799,6 +841,7 @@ function App() {
     shippingInfo: "",
     lineName: ""
   });
+  const [customerSuggestions, setCustomerSuggestions] = useState([]);
   const [orderCustomerSearch, setOrderCustomerSearch] = useState("");
   const [orderStatusFilter, setOrderStatusFilter] = useState("全部");
   const [mobileOrderTab, setMobileOrderTab] = useState("待處理");
@@ -1080,6 +1123,33 @@ function App() {
       setSelectedOrderQuantity(selected.stock);
     }
   }, [products, selectedOrderProductId, selectedOrderQuantity]);
+
+  useEffect(() => {
+    const keyword = orderForm.customerName.trim();
+    if (keyword.length < 2) {
+      setCustomerSuggestions([]);
+      return undefined;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      try {
+        const rows = await api(`/customer-profiles/search?query=${encodeURIComponent(keyword)}`).catch(() => []);
+        if (!cancelled) {
+          setCustomerSuggestions(rows);
+        }
+      } catch {
+        if (!cancelled) {
+          setCustomerSuggestions([]);
+        }
+      }
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [orderForm.customerName]);
 
   const selectedProduct = useMemo(
     () => products.find((product) => product.id === Number(saleForm.productId)),
@@ -1459,6 +1529,16 @@ function App() {
     );
   };
 
+  const selectCustomerProfile = (profile) => {
+    setOrderForm({
+      customerName: profile.customerName ?? "",
+      phone: profile.phone ?? "",
+      shippingInfo: profile.shippingInfo ?? "",
+      lineName: profile.lineName ?? ""
+    });
+    setCustomerSuggestions([]);
+  };
+
   const createOrder = async () => {
     console.log("[quick-order] button clicked");
     if (creatingOrder) return;
@@ -1520,6 +1600,7 @@ function App() {
       setSelectedOrderProductId(null);
       setSelectedOrderQuantity(1);
       setOrderProductSearch("");
+      setCustomerSuggestions([]);
       setOrderForm({
         customerName: "",
         phone: "",
@@ -2967,6 +3048,7 @@ function App() {
                         客戶名稱
                         <TextInput value={orderForm.customerName} onChange={(e) => setOrderForm({ ...orderForm, customerName: e.target.value })} placeholder="客戶姓名" />
                       </label>
+                      <CustomerProfileSuggestions profiles={customerSuggestions} onSelect={selectCustomerProfile} />
                       <label className="grid gap-1 text-sm font-medium text-slate-600">
                         電話
                         <TextInput value={orderForm.phone} onChange={(e) => setOrderForm({ ...orderForm, phone: e.target.value })} placeholder="聯絡電話" />
@@ -3133,6 +3215,7 @@ function App() {
                         客戶名稱
                         <TextInput value={orderForm.customerName} onChange={(e) => setOrderForm({ ...orderForm, customerName: e.target.value })} placeholder="客戶姓名" />
                       </label>
+                      <CustomerProfileSuggestions profiles={customerSuggestions} onSelect={selectCustomerProfile} />
                       <label className="grid gap-1 text-sm font-medium text-slate-600">
                         電話
                         <TextInput value={orderForm.phone} onChange={(e) => setOrderForm({ ...orderForm, phone: e.target.value })} placeholder="聯絡電話" />
