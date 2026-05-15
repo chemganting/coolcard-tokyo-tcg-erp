@@ -749,6 +749,7 @@ function App() {
   const [selectedOrderProductId, setSelectedOrderProductId] = useState(null);
   const [selectedOrderQuantity, setSelectedOrderQuantity] = useState(1);
   const [orderItems, setOrderItems] = useState([]);
+  const [creatingOrder, setCreatingOrder] = useState(false);
   const [orderForm, setOrderForm] = useState({
     customerName: "",
     phone: "",
@@ -1361,8 +1362,28 @@ function App() {
   };
 
   const addOrderItem = (product, quantity = 1) => {
-    if (!product || product.stock <= 0) return;
-    const nextQuantity = Math.max(1, Math.min(quantity, product.stock));
+    console.log("[quick-order] add item clicked", {
+      productId: product?.id ?? null,
+      productName: product?.name ?? null,
+      quantity,
+      stock: product?.stock ?? null,
+      selectedOrderProductId,
+      selectedOrderQuantity
+    });
+    if (!product) {
+      console.warn("[quick-order] add item blocked", { reason: "product missing" });
+      setError("商品尚未載入，請稍候再試");
+      return;
+    }
+    if (product.stock <= 0) {
+      console.warn("[quick-order] add item blocked", { reason: "out of stock", productId: product.id, productName: product.name, stock: product.stock });
+      setError(`${product.name} 目前沒有庫存`);
+      return;
+    }
+    const numericQuantity = Number(quantity);
+    const nextQuantity = Number.isFinite(numericQuantity) && numericQuantity > 0
+      ? Math.max(1, Math.min(numericQuantity, product.stock))
+      : 1;
     setOrderItems((current) => {
       const existing = current.find((item) => item.product.id === product.id);
       if (existing) {
@@ -1391,14 +1412,50 @@ function App() {
   };
 
   const createOrder = async () => {
-    if (orderItems.length === 0) return;
+    console.log("[quick-order] button clicked");
+    if (creatingOrder) return;
     setError("");
+    if (products.length === 0) {
+      setError("商品資料尚未載入完成，請稍候再試");
+      console.warn("[quick-order] create order blocked", { reason: "products not loaded" });
+      return;
+    }
+    if (!orderForm.customerName.trim()) {
+      setError("請輸入客戶名稱");
+      console.warn("[quick-order] create order blocked", { reason: "customer name missing" });
+      return;
+    }
+    if (orderItems.length === 0) {
+      setError("請先加入至少一項商品");
+      console.warn("[quick-order] create order blocked", { reason: "no order items" });
+      return;
+    }
+    const payload = {
+      ...orderForm,
+      items: orderItems.map((item) => ({
+        productId: item.product?.id,
+        quantity: Number(item.quantity)
+      }))
+    };
+    const invalidItem = payload.items.find((item) => !Number.isFinite(item.productId) || item.productId <= 0 || !Number.isFinite(item.quantity) || item.quantity <= 0);
+    if (invalidItem) {
+      setError("訂單商品資料異常，請重新加入商品");
+      console.warn("[quick-order] create order blocked", {
+        reason: "invalid item payload",
+        invalidItem,
+        items: payload.items
+      });
+      return;
+    }
+    setCreatingOrder(true);
     try {
       console.log("[quick-order] createOrder payload", {
         selectedOrderProductId,
         selectedOrderProductIdResolved: selectedOrderProduct?.id ?? null,
         selectedOrderProductName: selectedOrderProduct?.name ?? null,
         selectedOrderQuantity,
+        selectedProductId: selectedProduct?.id ?? null,
+        selectedProductName: selectedProduct?.name ?? null,
         items: orderItems.map((item) => ({
           productId: item.product.id,
           productName: item.product.name,
@@ -1406,15 +1463,10 @@ function App() {
           stock: item.product.stock
         }))
       });
+      console.log("[quick-order] sending order", payload);
       await api("/orders", {
         method: "POST",
-        body: JSON.stringify({
-          ...orderForm,
-          items: orderItems.map((item) => ({
-            productId: item.product.id,
-            quantity: item.quantity
-          }))
-        })
+        body: JSON.stringify(payload)
       });
       setOrderItems([]);
       setSelectedOrderProductId(null);
@@ -1431,7 +1483,10 @@ function App() {
       await refreshOrdersData({ includeSales: false });
       window.alert("訂單已建立");
     } catch (err) {
+      console.error("[quick-order] create order failed", err);
       setError(err.message);
+    } finally {
+      setCreatingOrder(false);
     }
   };
 
@@ -2918,9 +2973,9 @@ function App() {
                       ))}
                     </div>
                     <p className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-600">總金額：{currency.format(orderTotal)}</p>
-                    <Button type="button" disabled={orderItems.length === 0} onClick={createOrder}>
+                    <Button type="button" disabled={creatingOrder || orderItems.length === 0} onClick={createOrder}>
                       <ShoppingCart className="h-4 w-4" />
-                      建立訂單
+                      {creatingOrder ? "建立中..." : "建立訂單"}
                     </Button>
                   </div>
                 )}
@@ -3083,9 +3138,9 @@ function App() {
                         </div>
                       ))}
                     </div>
-                    <Button type="button" disabled={orderItems.length === 0} onClick={createOrder}>
+                    <Button type="button" disabled={creatingOrder || orderItems.length === 0} onClick={createOrder}>
                       <ShoppingCart className="h-4 w-4" />
-                      建立訂單
+                      {creatingOrder ? "建立中..." : "建立訂單"}
                     </Button>
                   </div>
                 )}
@@ -4252,9 +4307,9 @@ function App() {
                   <PackagePlus className="h-4 w-4" />
                   {productCreateTab === "import" ? "匯入商品" : editingId ? "儲存商品" : "建立商品"}
                 </Button>
-                <Button type="button" className="h-14 px-2 text-[11px]" disabled={orderItems.length === 0} onClick={createOrder}>
+                <Button type="button" className="h-14 px-2 text-[11px]" disabled={creatingOrder || orderItems.length === 0} onClick={createOrder}>
                   <ShoppingCart className="h-4 w-4" />
-                  建立訂單
+                  {creatingOrder ? "建立中..." : "建立訂單"}
                 </Button>
                 <Button
                   type="button"
