@@ -212,6 +212,10 @@ function orderStatusTone(status) {
   return "bg-rose-50 text-rose-700";
 }
 
+function logOrderFlow(stage, payload) {
+  console.log(`[order-flow] ${stage}`, JSON.stringify(payload));
+}
+
 function grossMargin(revenue, cost) {
   return revenue === 0 ? 0 : ((revenue - cost) / revenue) * 100;
 }
@@ -2643,6 +2647,20 @@ app.post("/api/orders", currentUser, async (request, response, next) => {
     return response.status(400).json({ message: "訂單資料不完整或格式錯誤" });
   }
 
+  logOrderFlow("create-request", {
+    userId: request.user.id,
+    status: order.status,
+    customerName: order.customerName,
+    items: order.items.map((item) => ({
+      productId: item.productId,
+      variantId: null,
+      sku: null,
+      color: null,
+      size: null,
+      quantity: item.quantity
+    }))
+  });
+
   const groupedItems = new Map();
   for (const item of order.items) {
     groupedItems.set(item.productId, (groupedItems.get(item.productId) ?? 0) + item.quantity);
@@ -2725,6 +2743,22 @@ app.post("/api/orders", currentUser, async (request, response, next) => {
       insertedItems.push(item.rows[0]);
     }
 
+    logOrderFlow("create-stock-deducted", {
+      orderId: insertedOrder.rows[0].id,
+      stockDeducted: true,
+      items: productIds.map((productId) => {
+        const before = beforeProducts.find((product) => product.id === productId);
+        const after = afterProducts.find((product) => product.id === productId);
+        return {
+          productId,
+          productName: before?.name ?? null,
+          quantity: groupedItems.get(productId),
+          stockBefore: before?.stock ?? null,
+          stockAfter: after?.stock ?? null
+        };
+      })
+    });
+
     const orderRow = await orderById(client, insertedOrder.rows[0].id);
     await writeAuditLog(
       client,
@@ -2736,6 +2770,11 @@ app.post("/api/orders", currentUser, async (request, response, next) => {
     );
 
     await client.query("COMMIT");
+    logOrderFlow("create-committed", {
+      orderId: insertedOrder.rows[0].id,
+      status: orderRow?.status ?? "pending",
+      stockDeducted: orderRow?.stockDeducted ?? true
+    });
     response.status(201).json({ id: insertedOrder.rows[0].id });
   } catch (error) {
     await client.query("ROLLBACK");
@@ -2804,6 +2843,13 @@ async function updateOrderStatus(request, response, next) {
     }
 
     await client.query("UPDATE orders SET status = $1, stock_deducted = $2, updated_at = NOW() WHERE id = $3", [nextStatus, nextStockDeducted, beforeOrder.id]);
+    logOrderFlow("status-updated", {
+      orderId: beforeOrder.id,
+      from: currentStatus,
+      to: nextStatus,
+      stockDeductedBefore: currentStockDeducted,
+      stockDeductedAfter: nextStockDeducted
+    });
     const afterOrder = await orderById(client, beforeOrder.id);
     await writeAuditLog(
       client,
